@@ -1,0 +1,673 @@
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  AlertTriangle,
+  Bell,
+  CircleDot,
+  Clock3,
+  FileText,
+  Filter,
+  Home,
+  MapPinned,
+  Menu,
+  Search,
+  Shield,
+  Users,
+  X,
+} from "lucide-react";
+import {
+  emitirAlertas,
+  fetchCaso,
+  fetchCasos,
+  fetchDashboard,
+  registrarReporte,
+} from "./api.js";
+
+const emptyFilters = {
+  texto: "",
+  estado: "",
+  zona: "",
+  edadMin: "0",
+  edadMax: "18",
+};
+
+const navItems = [
+  ["Inicio", Home],
+  ["Casos", CircleDot],
+  ["Alertas", AlertTriangle],
+  ["Mapa", MapPinned],
+  ["Reportes", Menu],
+  ["Usuarios", Users],
+];
+
+export function App() {
+  const [view, setView] = useState("dashboard");
+  const [casos, setCasos] = useState([]);
+  const [dashboard, setDashboard] = useState(null);
+  const [selectedCasoId, setSelectedCasoId] = useState(null);
+  const [selectedCaso, setSelectedCaso] = useState(null);
+  const [filters, setFilters] = useState(emptyFilters);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+
+  useEffect(() => {
+    refreshDashboard();
+    refreshCasos();
+    // Initial load only; later refreshes are triggered explicitly by user actions.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCasoId) {
+      return;
+    }
+
+    fetchCaso(selectedCasoId)
+      .then(setSelectedCaso)
+      .catch((exception) => setError(exception.message));
+  }, [selectedCasoId]);
+
+  async function refreshDashboard() {
+    try {
+      const data = await fetchDashboard();
+      setDashboard(data);
+    } catch (exception) {
+      setError(exception.message);
+    }
+  }
+
+  async function refreshCasos(nextFilters = filters) {
+    setLoading(true);
+    setError("");
+    try {
+      const data = await fetchCasos({ ...nextFilters, size: 20 });
+      setCasos(data);
+      if (!selectedCasoId && data.length > 0) {
+        setSelectedCasoId(data[0].casoId);
+      }
+    } catch (exception) {
+      setError(exception.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function openDetail(casoId) {
+    setSelectedCasoId(casoId);
+    setView("detail");
+  }
+
+  async function handleAlertSubmit(payload) {
+    if (!selectedCaso) {
+      return;
+    }
+
+    const updated = await emitirAlertas(selectedCaso.casoId, payload);
+    setSelectedCaso(updated);
+    await Promise.all([refreshDashboard(), refreshCasos()]);
+    setModalOpen(false);
+  }
+
+  async function handleQuickReport() {
+    if (!selectedCaso) {
+      return;
+    }
+
+    const coordinates = selectedCaso.menor.ultimaUbicacion.coordinates;
+    const updated = await registrarReporte(selectedCaso.casoId, {
+      longitude: coordinates[0] + 0.004,
+      latitude: coordinates[1] - 0.003,
+      descripcion: "Reporte ciudadano cargado desde panel FINDRA",
+      contacto: "linea 134",
+      operador: "OP_FINDRA",
+    });
+    setSelectedCaso(updated);
+  }
+
+  const activeCases = useMemo(
+    () => casos.filter((caso) => caso.estado === "ACTIVO"),
+    [casos],
+  );
+
+  return (
+    <div className="shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <Shield size={30} aria-hidden="true" />
+          <div>
+            <strong>FINDRA</strong>
+            <span>Alerta Sofia · SIFEBU</span>
+          </div>
+        </div>
+
+        <nav className="nav">
+          {navItems.map(([label, Icon]) => (
+            <button
+              className={view === "dashboard" && label === "Inicio" ? "active" : ""}
+              key={label}
+              type="button"
+              onClick={() => setView(label === "Inicio" ? "dashboard" : "search")}
+              title={label}
+            >
+              <Icon size={18} aria-hidden="true" />
+              <span>{label}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          <span>v2.4.1</span>
+          <strong>Turno: Noche</strong>
+        </div>
+      </aside>
+
+      <main className="workspace">
+        <header className="topbar">
+          <label className="global-search">
+            <Search size={18} aria-hidden="true" />
+            <input
+              placeholder="Buscar caso o menor..."
+              value={filters.texto}
+              onChange={(event) => setFilters({ ...filters, texto: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  refreshCasos();
+                  setView("search");
+                }
+              }}
+            />
+          </label>
+          <div className="status-pill">
+            <span className="pulse" />
+            {dashboard?.alertasActivas ?? 0} alertas activas
+          </div>
+        </header>
+
+        {error && (
+          <div className="alert-banner">
+            <AlertTriangle size={18} aria-hidden="true" />
+            {error}
+          </div>
+        )}
+
+        {view === "dashboard" && (
+          <Dashboard
+            activeCases={activeCases}
+            cases={casos}
+            dashboard={dashboard}
+            loading={loading}
+            onCreateCase={() => setView("search")}
+            onOpenCase={openDetail}
+          />
+        )}
+
+        {view === "search" && (
+          <SearchView
+            cases={casos}
+            filters={filters}
+            loading={loading}
+            onApply={() => refreshCasos()}
+            onChangeFilters={setFilters}
+            onClear={() => {
+              setFilters(emptyFilters);
+              refreshCasos(emptyFilters);
+            }}
+            onOpenCase={openDetail}
+          />
+        )}
+
+        {view === "detail" && selectedCaso && (
+          <CaseDetail
+            caso={selectedCaso}
+            onBack={() => setView("search")}
+            onEmitAlert={() => setModalOpen(true)}
+            onQuickReport={handleQuickReport}
+          />
+        )}
+      </main>
+
+      {modalOpen && selectedCaso && (
+        <AlertModal
+          caso={selectedCaso}
+          onClose={() => setModalOpen(false)}
+          onSubmit={handleAlertSubmit}
+        />
+      )}
+    </div>
+  );
+}
+
+function Dashboard({ activeCases, cases, dashboard, loading, onCreateCase, onOpenCase }) {
+  return (
+    <section className="view-grid">
+      <div className="section-heading">
+        <div>
+          <span>Panel Principal</span>
+          <h1>Casos activos</h1>
+        </div>
+        <button className="primary-button" type="button" onClick={onCreateCase}>
+          <FileText size={17} aria-hidden="true" />
+          Nuevo caso
+        </button>
+      </div>
+
+      <div className="metrics">
+        <Metric label="Casos activos" value={dashboard?.casosActivos ?? "-"} note="2 desde ayer" />
+        <Metric
+          label="Alertas emitidas hoy"
+          value={dashboard?.alertasEmitidasHoy ?? "-"}
+          note="Ultima: hace 34 min"
+        />
+        <Metric label="Casos resueltos" value={dashboard?.casosResueltosMes ?? "-"} note="Este mes" />
+        <Metric
+          label="Tiempo prom. activacion"
+          value={`${dashboard?.tiempoPromedioActivacionMinutos ?? 18} min`}
+          note="4 min menos vs. semana ant."
+        />
+      </div>
+
+      <div className="dashboard-layout">
+        <div className="panel">
+          <div className="panel-title">
+            <h2>Casos activos</h2>
+            {loading && <span>Cargando...</span>}
+          </div>
+          <CaseTable cases={activeCases} onOpenCase={onOpenCase} />
+        </div>
+        <GeoPanel cases={cases} />
+      </div>
+    </section>
+  );
+}
+
+function SearchView({
+  cases,
+  filters,
+  loading,
+  onApply,
+  onChangeFilters,
+  onClear,
+  onOpenCase,
+}) {
+  return (
+    <section className="search-layout">
+      <aside className="filters">
+        <div className="panel-title">
+          <h2>Filtros avanzados</h2>
+          <Filter size={18} aria-hidden="true" />
+        </div>
+
+        <label>
+          Estado del caso
+          <select
+            value={filters.estado}
+            onChange={(event) => onChangeFilters({ ...filters, estado: event.target.value })}
+          >
+            <option value="">Todos</option>
+            <option value="ACTIVO">Activo</option>
+            <option value="RESUELTO">Resuelto</option>
+            <option value="ARCHIVADO">Archivado</option>
+          </select>
+        </label>
+
+        <label>
+          Zona geografica
+          <input
+            value={filters.zona}
+            onChange={(event) => onChangeFilters({ ...filters, zona: event.target.value })}
+            placeholder="Provincia o localidad"
+          />
+        </label>
+
+        <div className="filter-row">
+          <label>
+            Edad min.
+            <input
+              min="0"
+              max="18"
+              type="number"
+              value={filters.edadMin}
+              onChange={(event) => onChangeFilters({ ...filters, edadMin: event.target.value })}
+            />
+          </label>
+          <label>
+            Edad max.
+            <input
+              min="0"
+              max="18"
+              type="number"
+              value={filters.edadMax}
+              onChange={(event) => onChangeFilters({ ...filters, edadMax: event.target.value })}
+            />
+          </label>
+        </div>
+
+        <button className="primary-button full" type="button" onClick={onApply}>
+          Buscar
+        </button>
+        <button className="ghost-button full" type="button" onClick={onClear}>
+          Limpiar filtros
+        </button>
+      </aside>
+
+      <div className="panel results-panel">
+        <div className="panel-title">
+          <div>
+            <h1>Buscador de casos</h1>
+            <span>{cases.length} resultados · Ordenar por tiempo transcurrido</span>
+          </div>
+          {loading && <span>Cargando...</span>}
+        </div>
+        <div className="case-list">
+          {cases.map((caso) => (
+            <button className="case-row" key={caso.casoId} type="button" onClick={() => onOpenCase(caso.casoId)}>
+              <Avatar name={caso.menor.nombre} />
+              <div>
+                <strong>{caso.menor.nombre}</strong>
+                <span>
+                  {caso.casoId} · {caso.menor.edad} anos · {caso.zona}
+                </span>
+              </div>
+              <ElapsedClock date={caso.fechaActivacion} />
+              {list(caso.alertasEmitidas).length > 0 && <span className="alert-chip">Alerta</span>}
+              <span className="link-label">Ver caso</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CaseDetail({ caso, onBack, onEmitAlert, onQuickReport }) {
+  return (
+    <section className="detail-view">
+      <div className="detail-header">
+        <button className="ghost-button" type="button" onClick={onBack}>
+          Volver
+        </button>
+        <div>
+          <span>{caso.casoId} · {caso.menor.nombre}</span>
+          <h1>{caso.estado}</h1>
+        </div>
+        <ElapsedClock date={caso.fechaActivacion} large />
+      </div>
+
+      <div className="detail-grid">
+        <div className="identity-panel">
+          <Avatar name={caso.menor.nombre} large />
+          <h2>{caso.menor.nombre}</h2>
+          <p>{caso.menor.edad} anos · {caso.menor.sexo === "F" ? "Femenino" : "Masculino"}</p>
+          <dl>
+            <dt>Cabello</dt>
+            <dd>{caso.menor.cabello}</dd>
+            <dt>Ojos</dt>
+            <dd>{caso.menor.ojos}</dd>
+            <dt>Estatura</dt>
+            <dd>{caso.menor.estatura}</dd>
+            <dt>Ropa</dt>
+            <dd>{caso.menor.ropa}</dd>
+            <dt>Senas</dt>
+            <dd>{caso.menor.senas}</dd>
+          </dl>
+        </div>
+
+        <div className="panel legal-panel">
+          <h2>Datos legales</h2>
+          <p>Expediente: {caso.autoridadJudicial.nroExpediente}</p>
+          <p>Fiscal: {caso.autoridadJudicial.fiscal}</p>
+          <p>Juez: {caso.autoridadJudicial.juez}</p>
+          <p>Denunciante: {caso.denunciante.nombre} ({caso.denunciante.vinculo})</p>
+        </div>
+
+        <GeoPanel cases={[caso]} detail />
+
+        <div className="panel alert-manager">
+          <div className="panel-title">
+            <h2>Gestor de alertas</h2>
+            <button className="primary-button" type="button" onClick={onEmitAlert}>
+              <Bell size={17} aria-hidden="true" />
+              Emitir Alerta Sofia
+            </button>
+          </div>
+          <div className="mini-table">
+            {list(caso.alertasEmitidas).map((alerta, index) => (
+              <div key={`${alerta.canal}-${index}`}>
+                <span>{alerta.canal}</span>
+                <span>{alerta.operador}</span>
+                <span>{formatDate(alerta.timestamp)}</span>
+                <strong>{alerta.estado}</strong>
+              </div>
+            ))}
+            {list(caso.alertasEmitidas).length === 0 && <p>No hay alertas emitidas.</p>}
+          </div>
+        </div>
+
+        <div className="panel attachments">
+          <h2>Adjuntos / Evidencia</h2>
+          {list(caso.documentosAdjuntos).map((doc) => (
+            <span key={doc.url}>{doc.tipo} {doc.url}</span>
+          ))}
+        </div>
+
+        <div className="panel timeline">
+          <div className="panel-title">
+            <h2>Linea de tiempo</h2>
+            <button className="ghost-button" type="button" onClick={onQuickReport}>
+              Reporte rapido
+            </button>
+          </div>
+          {list(caso.historialAcciones)
+            .slice()
+            .reverse()
+            .map((accion, index) => (
+              <div className="timeline-item" key={`${accion.accion}-${index}`}>
+                <time>{formatTime(accion.timestamp)}</time>
+                <div>
+                  <strong>{accion.usuario}</strong>
+                  <span>{accion.detalle}</span>
+                </div>
+              </div>
+            ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AlertModal({ caso, onClose, onSubmit }) {
+  const [channels, setChannels] = useState(["SMS masivo", "Redes sociales", "Aplicacion ciudadana FINDRA"]);
+  const [observaciones, setObservaciones] = useState("");
+  const [requiresAuthorization, setRequiresAuthorization] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+
+  function toggleChannel(channel) {
+    setChannels((current) =>
+      current.includes(channel)
+        ? current.filter((item) => item !== channel)
+        : [...current, channel],
+    );
+  }
+
+  async function submit() {
+    setSubmitting(true);
+    await onSubmit({
+      canales: channels,
+      observaciones,
+      requiereAutorizacion: requiresAuthorization,
+      operador: "OP_FINDRA",
+    });
+    setSubmitting(false);
+  }
+
+  return (
+    <div className="modal-backdrop">
+      <div className="modal">
+        <button className="icon-button close" type="button" onClick={onClose} title="Cerrar">
+          <X size={20} aria-hidden="true" />
+        </button>
+        <h2>Confirmar Alerta Sofia</h2>
+        <p>{caso.casoId} · {caso.menor.nombre}</p>
+
+        <fieldset>
+          <legend>Canales a activar</legend>
+          {["SMS masivo", "Redes sociales", "Cadena nacional TV + Radio", "Aplicacion ciudadana FINDRA"].map(
+            (channel) => (
+              <label className="check-line" key={channel}>
+                <input
+                  checked={channels.includes(channel)}
+                  type="checkbox"
+                  onChange={() => toggleChannel(channel)}
+                />
+                {channel}
+              </label>
+            ),
+          )}
+        </fieldset>
+
+        <label>
+          Observaciones
+          <textarea
+            placeholder="Motivo / notas adicionales..."
+            value={observaciones}
+            onChange={(event) => setObservaciones(event.target.value)}
+          />
+        </label>
+
+        <label className="check-line warning">
+          <input
+            checked={requiresAuthorization}
+            type="checkbox"
+            onChange={(event) => setRequiresAuthorization(event.target.checked)}
+          />
+          Requiere autorizacion del fiscal a cargo.
+        </label>
+
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="primary-button" type="button" disabled={submitting || channels.length === 0} onClick={submit}>
+            <Bell size={17} aria-hidden="true" />
+            Confirmar y emitir
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CaseTable({ cases, onOpenCase }) {
+  return (
+    <div className="case-table">
+      <div className="case-table-head">
+        <span>Menor</span>
+        <span>Edad</span>
+        <span>Zona</span>
+        <span>Tiempo</span>
+      </div>
+      {cases.map((caso) => (
+        <button key={caso.casoId} type="button" onClick={() => onOpenCase(caso.casoId)}>
+          <span className="table-person">
+            <Avatar name={caso.menor.nombre} />
+            <span>
+              <strong>{caso.menor.nombre}</strong>
+              <small>{caso.casoId}</small>
+            </span>
+          </span>
+          <span>{caso.menor.edad} anos</span>
+          <span>{caso.zona}</span>
+          <ElapsedClock date={caso.fechaActivacion} />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function GeoPanel({ cases, detail = false }) {
+  return (
+    <div className={`panel map-panel ${detail ? "map-detail" : ""}`}>
+      <div className="panel-title">
+        <h2>{detail ? "Ultima ubicacion conocida" : "Mapa de casos"}</h2>
+        <span>Vista nacional</span>
+      </div>
+      <div className="map-canvas">
+        {cases.slice(0, 7).map((caso, index) => (
+          <button
+            className={list(caso.alertasEmitidas).length > 0 ? "map-pin alert" : "map-pin"}
+            key={caso.casoId}
+            style={{
+              left: `${18 + ((index * 17) % 62)}%`,
+              top: `${24 + ((index * 23) % 52)}%`,
+            }}
+            title={`${caso.casoId} · ${caso.zona}`}
+            type="button"
+          >
+            <MapPinned size={16} aria-hidden="true" />
+          </button>
+        ))}
+      </div>
+      <div className="legend">
+        <span><i className="dot alert-dot" />Con alerta emitida</span>
+        <span><i className="dot" />Sin alerta</span>
+      </div>
+    </div>
+  );
+}
+
+function Metric({ label, value, note }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{note}</small>
+    </div>
+  );
+}
+
+function Avatar({ name, large = false }) {
+  const initials = name
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+  return <span className={large ? "avatar large" : "avatar"}>{initials}</span>;
+}
+
+function ElapsedClock({ date, large = false }) {
+  const elapsed = useMemo(() => {
+    const minutes = Math.max(0, Math.floor((Date.now() - new Date(date).getTime()) / 60000));
+    const hours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    return `${String(hours).padStart(2, "0")}:${String(remainder).padStart(2, "0")}:00`;
+  }, [date]);
+
+  return (
+    <span className={large ? "elapsed large" : "elapsed"}>
+      <Clock3 size={large ? 20 : 15} aria-hidden="true" />
+      {elapsed}
+    </span>
+  );
+}
+
+function formatDate(value) {
+  return new Intl.DateTimeFormat("es-AR", {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatTime(value) {
+  return new Intl.DateTimeFormat("es-AR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function list(value) {
+  return Array.isArray(value) ? value : [];
+}

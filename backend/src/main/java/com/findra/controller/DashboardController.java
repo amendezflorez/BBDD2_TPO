@@ -1,0 +1,23 @@
+package com.findra.controller;
+
+import com.findra.dto.DashboardResumen;
+import com.findra.service.DashboardService;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/api/dashboard")
+public class DashboardController {
+
+    private final DashboardService dashboardService;
+
+    public DashboardController(DashboardService dashboardService) {
+        this.dashboardService = dashboardService;
+    }
+
+    @GetMapping("/resumen")
+    public DashboardResumen resumen() {
+        return dashboardService.resumen();
+    }
+}
