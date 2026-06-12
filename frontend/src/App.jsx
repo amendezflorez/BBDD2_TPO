@@ -755,6 +755,19 @@ function CaseTable({ cases, onOpenCase }) {
   );
 }
 
+// Bounding box Argentina: lng [-73, -53], lat [-55, -22]
+const ARG_LNG_MIN = -73, ARG_LNG_MAX = -53;
+const ARG_LAT_MIN = -55, ARG_LAT_MAX = -22;
+
+function geoToPercent(coordinates) {
+  if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
+  const [lng, lat] = coordinates;
+  const left = ((lng - ARG_LNG_MIN) / (ARG_LNG_MAX - ARG_LNG_MIN)) * 100;
+  // lat is inverted: higher lat = lower top value
+  const top = ((ARG_LAT_MAX - lat) / (ARG_LAT_MAX - ARG_LAT_MIN)) * 100;
+  return { left: Math.min(Math.max(left, 2), 96), top: Math.min(Math.max(top, 2), 96) };
+}
+
 function GeoPanel({ cases, detail = false }) {
   return (
     <div className={`panel map-panel ${detail ? "map-detail" : ""}`}>
@@ -763,20 +776,22 @@ function GeoPanel({ cases, detail = false }) {
         <span>Vista nacional</span>
       </div>
       <div className="map-canvas">
-        {cases.slice(0, 7).map((caso, index) => (
-          <button
-            className={list(caso.alertasEmitidas).length > 0 ? "map-pin alert" : "map-pin"}
-            key={caso.casoId}
-            style={{
-              left: `${18 + ((index * 17) % 62)}%`,
-              top: `${24 + ((index * 23) % 52)}%`,
-            }}
-            title={`${caso.casoId} · ${caso.zona}`}
-            type="button"
-          >
-            <MapPinned size={16} aria-hidden="true" />
-          </button>
-        ))}
+        {cases.slice(0, 7).map((caso) => {
+          const coords = caso.menor?.ultimaUbicacion?.coordinates;
+          const pos = geoToPercent(coords);
+          if (!pos) return null;
+          return (
+            <button
+              className={list(caso.alertasEmitidas).length > 0 ? "map-pin alert" : "map-pin"}
+              key={caso.casoId}
+              style={{ left: `${pos.left}%`, top: `${pos.top}%` }}
+              title={`${caso.casoId} · ${caso.zona}`}
+              type="button"
+            >
+              <MapPinned size={16} aria-hidden="true" />
+            </button>
+          );
+        })}
       </div>
       <div className="legend">
         <span><i className="dot alert-dot" />Con alerta emitida</span>
