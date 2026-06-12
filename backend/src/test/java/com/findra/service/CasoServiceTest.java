@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Query;
 
 class CasoServiceTest {
@@ -25,7 +25,7 @@ class CasoServiceTest {
     @Test
     void emitirAlertasRegistraAlertaYHistorial() {
         CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoTemplate mongoTemplate = Mockito.mock(MongoTemplate.class);
+        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
         Caso caso = new Caso();
         caso.setCasoId("AS-2025-001");
         caso.setEstado(EstadoCaso.ACTIVO);
@@ -48,7 +48,7 @@ class CasoServiceTest {
     @Test
     void registrarReporteAgregaReporteYHistorial() {
         CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoTemplate mongoTemplate = Mockito.mock(MongoTemplate.class);
+        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
         Caso caso = new Caso();
         caso.setCasoId("AS-2025-002");
         caso.setEstado(EstadoCaso.ACTIVO);
@@ -70,7 +70,7 @@ class CasoServiceTest {
     @Test
     void actualizarEstadoCambiaEstadoYRegistraHistorial() {
         CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoTemplate mongoTemplate = Mockito.mock(MongoTemplate.class);
+        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
         Caso caso = new Caso();
         caso.setCasoId("AS-2025-003");
         caso.setEstado(EstadoCaso.ACTIVO);
@@ -92,7 +92,7 @@ class CasoServiceTest {
     @Test
     void crearCasoSetearFechaActivacionYEstadoActivo() {
         CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoTemplate mongoTemplate = Mockito.mock(MongoTemplate.class);
+        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
         Caso caso = new Caso();
         caso.setCasoId("AS-2025-004");
 
@@ -110,7 +110,7 @@ class CasoServiceTest {
     @Test
     void buscarFiltrarPorEstadoInvocaMongoTemplate() {
         CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoTemplate mongoTemplate = Mockito.mock(MongoTemplate.class);
+        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
         Caso caso = new Caso();
         caso.setCasoId("AS-2025-005");
         caso.setEstado(EstadoCaso.ACTIVO);

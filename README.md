@@ -5,25 +5,27 @@ FINDRA es un prototipo GovTech para centralizar casos del Protocolo Alerta Sofia
 ## Stack
 
 - Frontend: React JS + Vite
-- Backend: Java 17 + Spring Boot
-- Persistencia: MongoDB local
-- Documentacion API: Swagger/OpenAPI
+- Backend: Java 21 + Spring Boot 3.3
+- Persistencia: MongoDB 8
+- Cache: Redis 7 (Spring Cache, TTL 30s)
+- Documentacion API: Swagger/OpenAPI 3.0
 
 ## Requisitos
 
-- Java 17
+- Java 21
 - Maven 3.9+
 - Node.js 20+ y npm
-- MongoDB local activo en `localhost:27017`
-- MongoDB Compass opcional para inspeccionar la base `findra`
+- Docker (recomendado para MongoDB + Redis) o MongoDB local en `localhost:27017`
 
-La aplicacion usa MongoDB local por defecto:
+Variables de entorno con sus defaults:
 
 ```properties
-spring.data.mongodb.uri=${MONGODB_URI:mongodb://localhost:27017/findra}
+MONGODB_URI=mongodb://localhost:27017/findra
+REDIS_HOST=localhost
+REDIS_PORT=6379
 ```
 
-No hace falta crear `MONGODB_URI` si MongoDB corre en el puerto estandar.
+No hace falta definirlas si se usa Docker Compose.
 
 ## Ejecucion
 
@@ -71,17 +73,46 @@ npm run lint
 npm run build
 ```
 
-## Docker Opcional
+## Docker (recomendado)
 
-Si no se desea usar MongoDB local, existe un `docker-compose.yml` opcional para levantar MongoDB y Mongo Express.
+El `docker-compose.yml` levanta MongoDB 8, Mongo Express y Redis 7:
 
 ```powershell
 docker compose up -d
 ```
 
-## Alcance MVP
+Servicios disponibles:
 
-- Incluido: dashboard, busqueda/filtros, detalle de caso, emision de alertas, reportes ciudadanos, seed, API documentada, historial de acciones.
-- Fuera de alcance: autenticacion real, subida binaria de adjuntos, integraciones reales con organismos externos.
+| Servicio       | URL / puerto          |
+|----------------|-----------------------|
+| MongoDB        | `localhost:27017`     |
+| Mongo Express  | `http://localhost:8081` |
+| Redis          | `localhost:6379`      |
 
-Los ajustes frente al diseno original estan documentados en [docs/decisiones-tecnicas.md](docs/decisiones-tecnicas.md).
+Para verificar que el cache funciona tras levantar el dashboard:
+
+```powershell
+docker exec -it findra-redis redis-cli KEYS "*"
+# → "dashboard-resumen"
+```
+
+## Funcionalidades implementadas
+
+- Dashboard con metricas en vivo (casos activos, alertas emitidas hoy, resueltos este mes)
+- Buscador de casos con filtros por estado, zona y edad
+- Detalle de caso: datos del menor, legales, mapa con coordenadas reales de MongoDB, alertas y timeline
+- Registrar nuevo caso desde formulario completo
+- Cerrar o archivar un caso activo
+- Emitir Alerta Sofia con seleccion de canales
+- Registrar reporte ciudadano
+- Cache Redis del dashboard (TTL 30s, invalidacion reactiva)
+- 5 tests unitarios del servicio de casos
+
+## Fuera de alcance
+
+- Autenticacion real (operador simulado `OP_FINDRA`)
+- Subida binaria de adjuntos (se modela como metadata)
+- Integraciones reales con organismos externos
+- Replica Set MongoDB (instancia unica en dev; sin cambios de codigo para produccion)
+
+Los ajustes frente al diseno original estan documentados en la seccion 7 del [informe](docs/%5BBBDD%202%5D%20Informe_findra.md) y en [docs/decisiones-tecnicas.md](docs/decisiones-tecnicas.md).
