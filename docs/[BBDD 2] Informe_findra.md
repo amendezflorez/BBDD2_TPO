@@ -479,11 +479,18 @@ Justificación: El almacenamiento binario (GridFS, S3) requiere infraestructura 
 del alcance del MVP. El modelo de metadata preserva la estructura de datos y permite
 integrar el almacenamiento real sin cambios de esquema.
 
-7.5 Replica Set simplificado a instancia única
-Diseño original: MongoDB en Replica Set de 3 nodos con writeConcern: majority.
-Implementación: Instancia única MongoDB 8.0 en Docker para desarrollo local.
-Justificación: El Replica Set es configuración de infraestructura, no de código. El código de
-producción usa MongoOperations que es agnóstico al modo de despliegue; escalar a Replica
-Set en producción no requiere cambios en la aplicación.
+7.5 Replica Set simplificado a instancia única (desarrollo local)
+Diseño original: MongoDB en Replica Set de 3 nodos (rs0) con writeConcern: majority y
+failover automático, tal como se especifica en la sección 4.2 del informe.
+Implementación: Instancia única MongoDB 8.0 en Docker para el entorno de desarrollo local.
+En producción, la variable de entorno MONGODB_URI se configura con la connection string del
+Replica Set (mongodb://mongo1:27017,mongo2:27017,mongo3:27017/findra?replicaSet=rs0)
+sin ningún cambio en el código de la aplicación, dado que el driver usa MongoOperations
+que es agnóstico al modo de despliegue.
+Justificación: Levantar un Replica Set de 3 nodos localmente introduce complejidad
+operativa (inicialización del conjunto, resolución de hostnames entre contenedores, gestión
+de elecciones) que no aporta valor al prototipo académico. La arquitectura de alta
+disponibilidad está diseñada, documentada y lista para activarse con un cambio de
+configuración de infraestructura.
 
 Ingeniería de Datos II · TPO · 2026

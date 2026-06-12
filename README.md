@@ -83,11 +83,13 @@ docker compose up -d
 
 Servicios disponibles:
 
-| Servicio       | URL / puerto          |
-|----------------|-----------------------|
-| MongoDB        | `localhost:27017`     |
-| Mongo Express  | `http://localhost:8081` |
-| Redis          | `localhost:6379`      |
+| Servicio      | URL / puerto            | Rol                   |
+|---------------|-------------------------|-----------------------|
+| MongoDB       | `localhost:27017`       | Persistencia          |
+| Mongo Express | `http://localhost:8081` | Administración visual |
+| Redis         | `localhost:6379`        | Caché dashboard       |
+
+> **Arquitectura de producción:** el diseño propuesto contempla un Replica Set de 3 nodos MongoDB (`rs0`) con `writeConcern: majority` para alta disponibilidad y failover automático. En desarrollo local se usa instancia única para simplificar el entorno. La connection string de producción se configura vía la variable `MONGODB_URI` sin cambios en el código de la aplicación.
 
 Para verificar que el cache funciona tras levantar el dashboard:
 
