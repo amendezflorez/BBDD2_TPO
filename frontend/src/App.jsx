@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import {
   actualizarEstado,
+  crearCaso,
   emitirAlertas,
   fetchCaso,
   fetchCasos,
@@ -107,6 +108,17 @@ export function App() {
     setSelectedCaso(updated);
     await Promise.all([refreshDashboard(), refreshCasos()]);
     setModalOpen(false);
+  }
+
+  async function handleCrearCaso(payload) {
+    try {
+      const created = await crearCaso(payload);
+      await Promise.all([refreshDashboard(), refreshCasos()]);
+      setSelectedCasoId(created.casoId);
+      setView("detail");
+    } catch (exception) {
+      setError(exception.message);
+    }
   }
 
   async function handleCambiarEstado(estado) {
@@ -208,8 +220,15 @@ export function App() {
             cases={casos}
             dashboard={dashboard}
             loading={loading}
-            onCreateCase={() => setView("search")}
+            onCreateCase={() => setView("new-case")}
             onOpenCase={openDetail}
+          />
+        )}
+
+        {view === "new-case" && (
+          <NewCaseView
+            onBack={() => setView("dashboard")}
+            onSubmit={handleCrearCaso}
           />
         )}
 
@@ -494,6 +513,135 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport 
             ))}
         </div>
       </div>
+    </section>
+  );
+}
+
+function NewCaseView({ onBack, onSubmit }) {
+  const [submitting, setSubmitting] = useState(false);
+  const [form, setForm] = useState({
+    menorNombre: "",
+    menorEdad: "",
+    menorSexo: "F",
+    menorCabello: "",
+    menorOjos: "",
+    menorEstatura: "",
+    menorRopa: "",
+    menorSenas: "",
+    menorLat: "-34.6037",
+    menorLng: "-58.3816",
+    denuncianteNombre: "",
+    denuncianteVinculo: "",
+    denuncianteTel: "",
+    juez: "",
+    fiscal: "",
+    nroExpediente: "",
+    zona: "",
+  });
+
+  function set(key, value) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const payload = {
+      menor: {
+        nombre: form.menorNombre,
+        edad: Number(form.menorEdad),
+        sexo: form.menorSexo,
+        cabello: form.menorCabello,
+        ojos: form.menorOjos,
+        estatura: form.menorEstatura,
+        ropa: form.menorRopa,
+        senas: form.menorSenas,
+        ultimaUbicacion: {
+          type: "Point",
+          coordinates: [Number(form.menorLng), Number(form.menorLat)],
+          descripcion: form.zona,
+        },
+      },
+      denunciante: {
+        nombre: form.denuncianteNombre,
+        vinculo: form.denuncianteVinculo,
+        tel: form.denuncianteTel,
+      },
+      autoridadJudicial: {
+        juez: form.juez,
+        fiscal: form.fiscal,
+        nroExpediente: form.nroExpediente,
+      },
+      zona: form.zona,
+    };
+    setSubmitting(true);
+    try {
+      await onSubmit(payload);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="detail-view">
+      <div className="detail-header">
+        <button className="ghost-button" type="button" onClick={onBack}>
+          Volver
+        </button>
+        <div>
+          <span>Nuevo caso</span>
+          <h1>Registrar caso Alerta Sofía</h1>
+        </div>
+      </div>
+
+      <form className="new-case-form" onSubmit={handleSubmit}>
+        <div className="panel">
+          <h2>Datos del menor</h2>
+          <div className="form-grid">
+            <label>Nombre completo *<input required value={form.menorNombre} onChange={(e) => set("menorNombre", e.target.value)} /></label>
+            <label>Edad *<input required type="number" min="0" max="18" value={form.menorEdad} onChange={(e) => set("menorEdad", e.target.value)} /></label>
+            <label>Sexo
+              <select value={form.menorSexo} onChange={(e) => set("menorSexo", e.target.value)}>
+                <option value="F">Femenino</option>
+                <option value="M">Masculino</option>
+              </select>
+            </label>
+            <label>Cabello<input value={form.menorCabello} onChange={(e) => set("menorCabello", e.target.value)} /></label>
+            <label>Ojos<input value={form.menorOjos} onChange={(e) => set("menorOjos", e.target.value)} /></label>
+            <label>Estatura<input value={form.menorEstatura} onChange={(e) => set("menorEstatura", e.target.value)} /></label>
+            <label>Ropa<input value={form.menorRopa} onChange={(e) => set("menorRopa", e.target.value)} /></label>
+            <label>Señas particulares<input value={form.menorSenas} onChange={(e) => set("menorSenas", e.target.value)} /></label>
+            <label>Zona / última ubicación *<input required value={form.zona} onChange={(e) => set("zona", e.target.value)} placeholder="Ej: CABA" /></label>
+            <label>Latitud<input type="number" step="any" value={form.menorLat} onChange={(e) => set("menorLat", e.target.value)} /></label>
+            <label>Longitud<input type="number" step="any" value={form.menorLng} onChange={(e) => set("menorLng", e.target.value)} /></label>
+          </div>
+        </div>
+
+        <div className="panel">
+          <h2>Datos del denunciante</h2>
+          <div className="form-grid">
+            <label>Nombre *<input required value={form.denuncianteNombre} onChange={(e) => set("denuncianteNombre", e.target.value)} /></label>
+            <label>Vínculo<input value={form.denuncianteVinculo} onChange={(e) => set("denuncianteVinculo", e.target.value)} placeholder="Ej: madre" /></label>
+            <label>Teléfono<input value={form.denuncianteTel} onChange={(e) => set("denuncianteTel", e.target.value)} /></label>
+          </div>
+        </div>
+
+        <div className="panel">
+          <h2>Autoridad judicial</h2>
+          <div className="form-grid">
+            <label>N° expediente<input value={form.nroExpediente} onChange={(e) => set("nroExpediente", e.target.value)} /></label>
+            <label>Juez<input value={form.juez} onChange={(e) => set("juez", e.target.value)} /></label>
+            <label>Fiscal<input value={form.fiscal} onChange={(e) => set("fiscal", e.target.value)} /></label>
+          </div>
+        </div>
+
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={onBack}>Cancelar</button>
+          <button className="primary-button" type="submit" disabled={submitting}>
+            <FileText size={17} aria-hidden="true" />
+            {submitting ? "Registrando..." : "Registrar caso"}
+          </button>
+        </div>
+      </form>
     </section>
   );
 }

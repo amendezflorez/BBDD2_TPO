@@ -50,6 +50,13 @@ export function registrarReporte(casoId, payload) {
   });
 }
 
+export function crearCaso(payload) {
+  return request("/casos", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function actualizarEstado(casoId, estado, resultado = null) {
   return request(`/casos/${casoId}/estado`, {
     method: "PATCH",
