@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import {
+  actualizarEstado,
   emitirAlertas,
   fetchCaso,
   fetchCasos,
@@ -106,6 +107,17 @@ export function App() {
     setSelectedCaso(updated);
     await Promise.all([refreshDashboard(), refreshCasos()]);
     setModalOpen(false);
+  }
+
+  async function handleCambiarEstado(estado) {
+    if (!selectedCaso) return;
+    try {
+      const updated = await actualizarEstado(selectedCaso.casoId, estado);
+      setSelectedCaso(updated);
+      await Promise.all([refreshDashboard(), refreshCasos()]);
+    } catch (exception) {
+      setError(exception.message);
+    }
   }
 
   async function handleQuickReport() {
@@ -220,6 +232,7 @@ export function App() {
           <CaseDetail
             caso={selectedCaso}
             onBack={() => setView("search")}
+            onCambiarEstado={handleCambiarEstado}
             onEmitAlert={() => setModalOpen(true)}
             onQuickReport={handleQuickReport}
           />
@@ -379,7 +392,7 @@ function SearchView({
   );
 }
 
-function CaseDetail({ caso, onBack, onEmitAlert, onQuickReport }) {
+function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport }) {
   return (
     <section className="detail-view">
       <div className="detail-header">
@@ -391,6 +404,16 @@ function CaseDetail({ caso, onBack, onEmitAlert, onQuickReport }) {
           <h1>{caso.estado}</h1>
         </div>
         <ElapsedClock date={caso.fechaActivacion} large />
+        {caso.estado === "ACTIVO" && (
+          <button className="ghost-button" type="button" onClick={() => onCambiarEstado("RESUELTO")}>
+            Cerrar caso
+          </button>
+        )}
+        {caso.estado === "ACTIVO" && (
+          <button className="ghost-button" type="button" onClick={() => onCambiarEstado("ARCHIVADO")}>
+            Archivar
+          </button>
+        )}
       </div>
 
       <div className="detail-grid">

@@ -49,3 +49,10 @@ export function registrarReporte(casoId, payload) {
     body: JSON.stringify(payload),
   });
 }
+
+export function actualizarEstado(casoId, estado, resultado = null) {
+  return request(`/casos/${casoId}/estado`, {
+    method: "PATCH",
+    body: JSON.stringify({ estado, resultado, operador: "OP_FINDRA" }),
+  });
+}
