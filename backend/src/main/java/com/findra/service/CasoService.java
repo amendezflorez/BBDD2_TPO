@@ -21,6 +21,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -82,6 +83,7 @@ public class CasoService {
                 .orElseThrow(() -> new NotFoundException("Caso no encontrado: " + casoId));
     }
 
+    @CacheEvict(value = "dashboard-resumen", allEntries = true)
     public Caso crear(Caso caso) {
         caso.setFechaActivacion(Instant.now());
         caso.setEstado(EstadoCaso.ACTIVO);
@@ -93,6 +95,7 @@ public class CasoService {
         return casoRepository.save(caso);
     }
 
+    @CacheEvict(value = "dashboard-resumen", allEntries = true)
     public Caso actualizarEstado(String casoId, EstadoCasoRequest request) {
         Caso caso = obtenerPorCasoId(casoId);
         caso.setEstado(request.estado());
@@ -105,6 +108,7 @@ public class CasoService {
         return casoRepository.save(caso);
     }
 
+    @CacheEvict(value = "dashboard-resumen", allEntries = true)
     public Caso emitirAlertas(String casoId, EmitirAlertaRequest request) {
         Caso caso = obtenerPorCasoId(casoId);
         Instant now = Instant.now();
@@ -131,6 +135,7 @@ public class CasoService {
         return casoRepository.save(caso);
     }
 
+    @CacheEvict(value = "dashboard-resumen", allEntries = true)
     public Caso registrarReporte(String casoId, ReporteRequest request) {
         Caso caso = obtenerPorCasoId(casoId);
         ReporteCiudadano reporte = new ReporteCiudadano();

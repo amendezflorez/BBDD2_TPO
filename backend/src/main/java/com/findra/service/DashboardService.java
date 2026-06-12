@@ -10,6 +10,7 @@ import java.time.ZoneOffset;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -23,6 +24,7 @@ public class DashboardService {
         this.mongoTemplate = mongoTemplate;
     }
 
+    @Cacheable("dashboard-resumen")
     public DashboardResumen resumen() {
         long casosActivos = casoRepository.countByEstado(EstadoCaso.ACTIVO);
         long alertasActivas = mongoTemplate.count(new Query(Criteria.where("alertas_emitidas.0").exists(true)
