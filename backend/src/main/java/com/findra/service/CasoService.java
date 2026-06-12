@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.regex.Pattern;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
-import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.cache.annotation.CacheEvict;
@@ -30,9 +30,9 @@ public class CasoService {
     private static final String OPERADOR_DEFAULT = "OP_FINDRA";
 
     private final CasoRepository casoRepository;
-    private final MongoTemplate mongoTemplate;
+    private final MongoOperations mongoTemplate;
 
-    public CasoService(CasoRepository casoRepository, MongoTemplate mongoTemplate) {
+    public CasoService(CasoRepository casoRepository, MongoOperations mongoTemplate) {
         this.casoRepository = casoRepository;
         this.mongoTemplate = mongoTemplate;
     }

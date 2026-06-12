@@ -4,10 +4,9 @@ import com.findra.dto.DashboardResumen;
 import com.findra.model.Caso;
 import com.findra.model.EstadoCaso;
 import com.findra.repository.CasoRepository;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
-import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.cache.annotation.Cacheable;
@@ -17,9 +16,9 @@ import org.springframework.stereotype.Service;
 public class DashboardService {
 
     private final CasoRepository casoRepository;
-    private final MongoTemplate mongoTemplate;
+    private final MongoOperations mongoTemplate;
 
-    public DashboardService(CasoRepository casoRepository, MongoTemplate mongoTemplate) {
+    public DashboardService(CasoRepository casoRepository, MongoOperations mongoTemplate) {
         this.casoRepository = casoRepository;
         this.mongoTemplate = mongoTemplate;
     }
