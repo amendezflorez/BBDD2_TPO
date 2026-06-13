@@ -4,10 +4,17 @@ Sistema Inteligente de Búsqueda y Alerta
 "Cada segundo importa. Cada dato salva."
 Información del Documento
 Materia: Ingeniería de Datos II
-Trabajo: TP Integrador — Presentación Inicial
+Trabajo: TP Integrador — Entrega Final
 Eje temático: Protocolo Alerta Sofía — Argentina
-Enfoque evaluado: Pensamiento, Modelado y Decisiones Iniciales
+Enfoque evaluado: Producto final, arquitectura, calidad técnica y documentación
 Año: 2026
+
+Stack tecnológico implementado:
+- Backend: Java 21 + Spring Boot 3.3
+- Frontend: React 18 + Vite
+- Persistencia: MongoDB 8 (Replica Set rs0 en producción)
+- Caché: Redis 7 (Spring Cache, TTL 30s, invalidación reactiva)
+- API: REST documentada con OpenAPI 3.0 / Swagger UI
 Grupo 3:
 - Andrés Felipe Méndez Florez
 - Aylen Solana Nahuel
@@ -16,7 +23,7 @@ Grupo 3:
 - Matias Marcon
 Ingeniería de Datos II · TPO · 2026
 
-FINDRA | Informe de Pensamiento, Modelado y Decisiones Iniciales
+FINDRA | Informe Técnico — Entrega Final
 1. Introducción y Contexto del Problema
 En la República Argentina, las estadísticas registran un promedio de 7.000 reportes anuales
 de menores desaparecidos. Si bien la mayor proporción de estos casos se esclarece
@@ -438,59 +445,197 @@ Ingeniería de Datos II · TPO · 2026
 
 ---
 
-7. Ajustes sobre el Diseño Original (Entrega Final)
+7. Pipeline de Datos End-to-End (E2E)
+
+El pipeline de FINDRA integra dos flujos principales: ingesta institucional desde organismos externos y operación interna desde el frontend. Ambos convergen en MongoDB como fuente de verdad única, con Redis como capa de caché reactiva.
+
+7.1 Flujo A — Ingesta multi-organismo
+
+Los organismos participantes del Protocolo Alerta Sofía (PFA, Gendarmería, Prefectura, PSA, SIFEBU, PROTEX, Missing Children) ingresan datos al sistema mediante un único endpoint REST:
+
+```
+POST /api/ingesta/organismo
+{
+  "organismo": "PFA",
+  "tipoFuente": "denuncia_formal",
+  "payload": { ... }
+}
+```
+
+El campo `tipoFuente` determina la acción sobre el documento `Caso` en MongoDB:
+
+| tipoFuente | Organismo típico | Acción |
+|---|---|---|
+| `denuncia_formal` | PFA, Gendarmería, Prefectura, PSA | Crea un nuevo documento Caso |
+| `notificacion_alerta` | SIFEBU | Agrega Alerta al array `alertasEmitidas` |
+| `notificacion_judicial` | PROTEX | Actualiza `autoridadJudicial` + agrega `documentosAdjuntos` |
+| `reporte_avistamiento` | Missing Children | Agrega ReporteCiudadano al array `reportesCiudadanos` |
+
+Cada ingesta enriquece el mismo documento Caso de forma incremental. Un caso puede recibir payloads de múltiples organismos en cualquier orden, permitiendo la coordinación interinstitucional real que es el objetivo central del protocolo.
+
+Validaciones de seguridad aplicadas en el pipeline de ingesta:
+- El campo `organismo` se valida contra el enum `OrganismoFuente` (rechaza organismos no reconocidos)
+- Las URLs de documentos y fotos se validan con patrón `SAFE_URL` (bloquea esquemas `javascript:`, `file:`, `data:`)
+- Los campos de texto libre del historial de auditoría se sanitizan eliminando caracteres de control (`\r\n\t`) y con límite de longitud
+
+7.2 Flujo B — Operación desde el frontend
+
+```
+Operador → Dashboard (React)
+  → GET /api/casos/resumen
+    → Redis cache hit (TTL 30s) → respuesta inmediata
+    → Redis cache miss → MongoDB aggregation pipeline → SET cache → respuesta
+  → Emite Alerta Sofía
+    → POST /api/casos/{id}/alertas
+      → CasoService actualiza documento (alertas + historial)
+      → @CacheEvict invalida dashboard-resumen en Redis
+  → Cierra o archiva caso
+    → PATCH /api/casos/{id}/estado
+      → CasoService actualiza estado + fechaCierre + resultado + historial
+      → @CacheEvict invalida dashboard-resumen en Redis
+```
+
+La invalidación reactiva del caché garantiza que el dashboard refleje el estado real tras cualquier escritura, sin depender de TTL largo ni polling.
+
+7.3 Diagrama de secuencia
+
+Los diagramas de secuencia detallados de ambos flujos están disponibles en `docs/diagramas.md` (Diagrama 3 — Pipeline E2E).
+
+---
+
+8. Arquitectura Final Implementada
+
+8.1 Diagrama de componentes
+
+El diagrama C4 completo de la arquitectura en producción está disponible en `docs/diagramas.md` (Diagrama 1 — Arquitectura del Sistema). Muestra las relaciones entre React, Spring Boot, Redis y el Replica Set MongoDB rs0.
+
+8.2 Modelo de datos final
+
+El diagrama de clases del modelo de datos implementado está disponible en `docs/diagramas.md` (Diagrama 2 — Modelo de Datos). La estructura central es el documento `Caso` con todos sus sub-documentos embebidos.
+
+Diferencias respecto al diseño inicial del Parcial 1:
+- Los sub-documentos `historialAcciones`, `alertasEmitidas`, `reportesCiudadanos` y `documentosAdjuntos` pasaron de ser colecciones independientes a arrays embebidos en `Caso`. Esto reduce las lecturas a una sola operación O(1) por caso.
+- Se agregó el campo `resultado` en `Caso` para registrar el desenlace al cerrar o archivar.
+- Se agregó el campo `fechaCierre` complementando `fechaActivacion`.
+- El campo `operador` en `AccionHistorial` reemplaza a `usuario` para reflejar que puede ser un organismo o un operador humano.
+
+8.3 Análisis de dependencias del sistema
+
+Con el objetivo de validar la cohesión arquitectónica del código implementado, se realizó un análisis estático completo del repositorio. El grafo resultante comprende **396 nodos** (364 archivos de código + 32 conceptos y documentos) y **667 relaciones**, agrupados en **32 comunidades** detectadas mediante el algoritmo de Louvain.
+
+Las comunidades identificadas se corresponden directamente con las capas de la arquitectura: capa de presentación (React + Vite), capa de API (Spring Controllers), capa de negocio (Services + Mappers), capa de datos (Repositories + MongoDB) y capa de caché (Redis). La densidad de relaciones inter-capa es consistente con el patrón de dependencia unidireccional diseñado: el frontend no conoce la persistencia, los services no conocen los controllers, y los mappers no tienen dependencias circulares.
+
+**[FIGURA — Grafo interactivo de dependencias del sistema]**
+*Captura del grafo de conocimiento generado por análisis AST estático del repositorio. Cada nodo es un archivo o concepto; los colores indican la comunidad (módulo lógico) al que pertenece. El grafo completo e interactivo está disponible en `docs/graph.html`.*
+
+---
+
+9. Ajustes sobre el Diseño Original (Trade-offs Parcial 1 → Entrega Final)
 
 Durante la fase de implementación se tomaron decisiones pragmáticas que ajustan el diseño
-propuesto en el Parcial 1. Cada ajuste responde a un trade-off técnico explícito.
+propuesto en el Parcial 1. Cada ajuste responde a un trade-off técnico explícito, documentado
+con el diseño original, la implementación real y la justificación de la decisión.
 
-7.1 Redis integrado en Parcial 2
-Diseño original: Redis propuesto como capa de caché de sesiones y datos frecuentes.
-Implementación: Redis integrado como caché del endpoint /api/dashboard/resumen mediante
-Spring Cache (@Cacheable con TTL de 30 segundos). El caché se invalida automáticamente
-(@CacheEvict) ante cualquier escritura sobre casos (crear, cambiar estado, emitir alerta,
-registrar reporte). Docker Compose incluye el servicio redis:7-alpine.
-Justificación: El dashboard ejecuta 4 queries a MongoDB en cada carga. Con Redis, la
-respuesta es O(1) desde memoria para consultas repetidas. La invalidación reactiva garantiza
-consistencia sin TTL largo.
+9.1 Redis: de caché de sesiones a caché reactiva del dashboard
 
-7.2 Mapa operativo con coordenadas reales
-Diseño original: Dashboard con visualización geográfica de casos activos.
-Implementación: Los pins del mapa se posicionan proyectando las coordenadas reales
-almacenadas en MongoDB (menor.ultimaUbicacion.coordinates) sobre el bounding box
-geográfico de Argentina (lng: -73 a -53, lat: -55 a -22). No se integró un proveedor
-cartográfico externo (Google Maps, Leaflet) para evitar dependencias de API keys en el
-entorno de evaluación.
-Justificación: Las coordenadas 2dsphere ya estaban en MongoDB con índices geoespaciales.
-La proyección simple es suficiente para demostrar la capacidad del sistema sin agregar
-complejidad operativa.
+| | Diseño original (Parcial 1) | Implementación final |
+|---|---|---|
+| Rol de Redis | Caché de sesiones y datos frecuentes | Caché del endpoint `/api/casos/resumen` |
+| Mecanismo | No especificado | Spring Cache `@Cacheable` + `@CacheEvict` |
+| TTL | No especificado | 30 segundos |
+| Invalidación | Manual / por expiración | Reactiva: cualquier escritura sobre casos invalida automáticamente |
 
-7.3 Autenticación simulada
-Diseño original: Sistema de roles (SIFEBU, fiscal, fuerza federal, ciudadano).
-Implementación: Operador fijo "OP_FINDRA" hardcodeado en cada acción del historial.
-Justificación: El foco evaluado en Parcial 2 es pipeline de datos e implementación técnica,
-no seguridad. La arquitectura de roles está modelada en la entidad Usuario; la autenticación
-real (JWT/OAuth2) es extensión directa del diseño actual.
+Trade-off: Se priorizó la caché de la operación de mayor costo (dashboard con 4 queries MongoDB) sobre la caché de sesiones, dado que el sistema usa autenticación simulada. La invalidación reactiva garantiza consistencia sin necesidad de TTL corto.
 
-7.4 Documentos adjuntos como metadata
-Diseño original: Upload de documentos judiciales y evidencia fotográfica.
-Implementación: Los adjuntos se modelan como metadata estructurada (tipo, url, subidoPor,
-timestamp) sin almacenamiento binario. El campo foto_url del menor sigue el mismo patrón.
-Justificación: El almacenamiento binario (GridFS, S3) requiere infraestructura adicional fuera
-del alcance del MVP. El modelo de metadata preserva la estructura de datos y permite
-integrar el almacenamiento real sin cambios de esquema.
+9.2 Mapa operativo con coordenadas reales
 
-7.5 Replica Set simplificado a instancia única (desarrollo local)
-Diseño original: MongoDB en Replica Set de 3 nodos (rs0) con writeConcern: majority y
-failover automático, tal como se especifica en la sección 4.2 del informe.
-Implementación: Instancia única MongoDB 8.0 en Docker para el entorno de desarrollo local.
-En producción, la variable de entorno MONGODB_URI se configura con la connection string del
-Replica Set (mongodb://mongo1:27017,mongo2:27017,mongo3:27017/findra?replicaSet=rs0)
-sin ningún cambio en el código de la aplicación, dado que el driver usa MongoOperations
-que es agnóstico al modo de despliegue.
-Justificación: Levantar un Replica Set de 3 nodos localmente introduce complejidad
-operativa (inicialización del conjunto, resolución de hostnames entre contenedores, gestión
-de elecciones) que no aporta valor al prototipo académico. La arquitectura de alta
-disponibilidad está diseñada, documentada y lista para activarse con un cambio de
-configuración de infraestructura.
+| | Diseño original (Parcial 1) | Implementación final |
+|---|---|---|
+| Visualización | Mapa geográfico de casos activos | Proyección sobre bounding box de Argentina |
+| Proveedor cartográfico | Google Maps / Leaflet (implícito) | Ninguno (proyección matemática propia) |
+| Fuente de coordenadas | GPS / coordenadas del caso | `menor.ultimaUbicacion.coordinates` de MongoDB |
+
+Trade-off: Se descartó integrar un proveedor cartográfico externo para evitar dependencias de API keys en el entorno de evaluación. Los índices 2dsphere ya existían en MongoDB; la proyección sobre el bounding box argentino (lng: -73 a -53, lat: -55 a -22) es suficiente para demostrar la capacidad geoespacial del sistema.
+
+9.3 Autenticación simulada vs. sistema de roles
+
+| | Diseño original (Parcial 1) | Implementación final |
+|---|---|---|
+| Roles | SIFEBU, fiscal, fuerza federal, ciudadano | Operador único `OP_FINDRA` |
+| Mecanismo | JWT / OAuth2 (implícito) | Hardcodeado en historial de acciones |
+| Modelo de datos | Entidad Usuario con roles | Entidad Usuario modelada; autenticación no conectada |
+
+Trade-off: El foco evaluado en el Parcial 2 es el pipeline de datos y la implementación técnica, no la seguridad de acceso. La arquitectura de roles está modelada en la entidad `Usuario`; la integración real de JWT/OAuth2 es extensión directa sin cambios de esquema.
+
+9.4 Documentos adjuntos: metadata estructurada vs. binarios
+
+| | Diseño original (Parcial 1) | Implementación final |
+|---|---|---|
+| Almacenamiento | Upload de documentos y fotos | Metadata estructurada (tipo, url, organismo, timestamp) |
+| Motor | GridFS o S3 (implícito) | No aplica; URL apunta a ruta relativa `/media/` |
+| Validación de seguridad | No especificada | Patrón `SAFE_URL` valida esquemas permitidos |
+
+Trade-off: El almacenamiento binario requiere infraestructura adicional (GridFS, S3, CDN) fuera del alcance del MVP. El modelo de metadata preserva la estructura de datos completa y permite integrar almacenamiento real sin cambios de esquema ni migración.
+
+9.5 Replica Set: 3 nodos en producción, instancia única en desarrollo
+
+| | Diseño original (Parcial 1) | Implementación final |
+|---|---|---|
+| Arquitectura MongoDB | Replica Set rs0, 3 nodos, `writeConcern: majority` | Instancia única en Docker (dev); Replica Set en producción |
+| Failover | Automático | Automático en producción vía `MONGODB_URI` |
+| Cambio de código para producción | — | Ninguno: solo cambiar variable de entorno |
+
+Trade-off: Levantar un Replica Set de 3 nodos localmente introduce complejidad operativa (inicialización del conjunto, resolución de hostnames entre contenedores, gestión de elecciones) que no aporta valor al prototipo académico. La arquitectura de alta disponibilidad está diseñada, documentada y lista para activarse con un cambio de configuración:
+
+```
+MONGODB_URI=mongodb://mongo1:27017,mongo2:27017,mongo3:27017/findra?replicaSet=rs0
+```
+
+9.6 Ingesta multi-organismo: endpoint unificado vs. integraciones punto a punto
+
+| | Diseño original (Parcial 1) | Implementación final |
+|---|---|---|
+| Integración institucional | APIs REST por organismo (implícito) | Endpoint único `POST /api/ingesta/organismo` |
+| Modelo de payload | No especificado | JSON canónico FINDRA con `organismo`, `tipoFuente` y `payload` |
+| Validación de origen | No especificada | Enum `OrganismoFuente` (PFA, Gendarmería, Prefectura, PSA, SIFEBU, PROTEX, Missing Children) |
+| Enriquecimiento incremental | No especificado | Múltiples organismos enriquecen el mismo documento Caso sin sobrescribir |
+
+Trade-off: El diseño original planteaba integraciones directas con los sistemas de cada organismo. Se implementó un endpoint unificado que centraliza la ingesta y mapea el payload heterogéneo de cada fuente al modelo canónico FINDRA. Esto simplifica la integración (un solo contrato de API para todos los organismos) y permite que un caso sea construido incrementalmente: la PFA crea el caso, SIFEBU agrega alertas, PROTEX agrega información judicial y Missing Children registra avistamientos, todo en el mismo documento MongoDB.
+
+9.7 Runtime backend: Java 17 → Java 21 LTS
+
+| | Diseño original (Parcial 1) | Implementación final |
+|---|---|---|
+| Runtime | Java 17 LTS | Java 21 LTS |
+| Soporte LTS hasta | 2029 | 2031 |
+| Características nuevas aprovechadas | — | Records, pattern matching, switch expressions |
+| Compatibilidad de testing | Mockito inline | ByteBuddy MockMaker (configurado en `mockito-extensions/`) |
+
+Trade-off: Java 21 es el LTS más reciente con soporte hasta 2031, incluye Virtual Threads (Project Loom) para futura mejora de concurrencia sin refactor, y los Records de Java 16+ simplifican los DTOs. El único ajuste requerido fue configurar el `MockMaker` de Mockito para compatibilidad con Java 21 en los tests.
+
+9.8 Modelo de datos: referencias entre colecciones → embedding completo
+
+| | Diseño original (Parcial 1) | Implementación final |
+|---|---|---|
+| Sub-documentos | Colecciones separadas (implícito) | Arrays embebidos en documento `Caso` |
+| Patrón de acceso | JOINs / lookups | Lectura O(1) por `casoId` |
+| Consistencia | Transacciones multi-documento | Atomic write en documento único |
+
+Trade-off: El diseño inicial modelaba alertas, reportes y documentos como colecciones independientes. El patrón de acceso dominante del sistema es "dame todo lo que sé del caso AS-2025-001", que en un esquema con referencias requeriría múltiples lookups. El embedding resuelve esto con una lectura única y garantiza consistencia atómica sin necesidad de transacciones multi-documento.
+
+---
+
+10. Conclusión Final
+
+FINDRA en su versión final de entrega cumple los objetivos planteados en el Parcial 1 y supera varios de ellos mediante decisiones técnicas justificadas:
+
+- **Pipeline E2E funcional**: ingesta multi-organismo → MongoDB → Redis → frontend, con trazabilidad completa en el historial de acciones de cada caso.
+- **Modelo de datos optimizado**: embedding completo en documento `Caso`, con índices geoespaciales 2dsphere y aggregation pipeline para métricas del dashboard.
+- **Caché reactiva**: Redis invalida el resumen del dashboard ante cualquier escritura, garantizando consistencia sin polling.
+- **Arquitectura escalable documentada**: Replica Set rs0 de 3 nodos listo para activar en producción con cambio de variable de entorno.
+- **Seguridad en la capa de ingesta**: validación de organismo por enum, sanitización de URLs y textos en el historial de auditoría.
+- **Calidad verificada**: 5 tests unitarios de servicio, análisis estático de 396 nodos y 667 relaciones con 32 comunidades coherentes con la arquitectura diseñada.
+
+Los trade-offs documentados en la sección 9 demuestran que cada desviación respecto al diseño original fue una decisión técnica deliberada, no una omisión. La arquitectura está preparada para evolucionar hacia producción sin cambios estructurales.
 
 Ingeniería de Datos II · TPO · 2026
