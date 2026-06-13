@@ -3,6 +3,7 @@ package com.findra.service;
 import com.findra.dto.ingesta.IngestaRequest;
 import com.findra.dto.ingesta.IngestaResponse;
 import com.findra.model.Caso;
+import com.findra.model.OrganismoFuente;
 import com.findra.repository.CasoRepository;
 import java.time.Instant;
 import java.util.Map;
@@ -22,7 +23,12 @@ public class IngestaService {
     }
 
     public IngestaResponse procesar(IngestaRequest request) {
-        String organismo = request.organismo().toUpperCase();
+        String organismo;
+        try {
+            organismo = OrganismoFuente.valueOf(request.organismo().toUpperCase()).name();
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Organismo no reconocido: " + request.organismo());
+        }
         String tipo = request.tipoFuente().toLowerCase();
         Map<String, Object> payload = request.payload();
 

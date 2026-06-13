@@ -16,6 +16,7 @@ import java.time.Year;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
 @SuppressWarnings("unchecked")
@@ -30,7 +31,8 @@ public class IngestaMapper {
         Integer edad = intVal(payload, "menor_edad");
         if (edad != null) menor.setEdad(edad);
         menor.setSexo(str(payload, "menor_sexo"));
-        menor.setFotoUrl(str(payload, "menor_foto") != null ? str(payload, "menor_foto") : "/media/" + casoId + "/foto_principal.jpg");
+        String fotoRaw = str(payload, "menor_foto");
+        menor.setFotoUrl(fotoRaw != null ? safeUrl(fotoRaw) : "/media/" + casoId + "/foto_principal.jpg");
 
         String descripcionFisica = str(payload, "descripcion_fisica");
         if (descripcionFisica != null) {
@@ -72,9 +74,9 @@ public class IngestaMapper {
                 if (item instanceof Map<?, ?> docMap) {
                     Map<String, Object> doc = (Map<String, Object>) docMap;
                     caso.getDocumentosAdjuntos().add(new DocumentoAdjunto(
-                            str(doc, "tipo"),
-                            str(doc, "url"),
-                            organismo,
+                            safeText(str(doc, "tipo"), 50),
+                            safeUrl(str(doc, "url")),
+                            safeOrganismo(organismo),
                             instant(doc, "timestamp")));
                 }
             }
@@ -97,7 +99,7 @@ public class IngestaMapper {
                     alerta.setZona(str(c, "zona"));
                     alerta.setTimestamp(instant(c, "timestamp"));
                     alerta.setPlataforma(str(c, "plataforma"));
-                    alerta.setOperador(operador != null ? operador : organismo);
+                    alerta.setOperador(safeText(operador != null ? operador : organismo, 64));
                     alerta.setEstado(EstadoAlerta.ENVIADA);
                     caso.getAlertasEmitidas().add(alerta);
                 }
@@ -106,9 +108,9 @@ public class IngestaMapper {
 
         caso.getHistorialAcciones().add(new AccionHistorial(
                 "alerta_emitida",
-                organismo,
+                safeOrganismo(organismo),
                 now,
-                "Notificación de alerta recibida de " + organismo));
+                "Notificacion de alerta recibida de " + safeOrganismo(organismo)));
     }
 
     public void mapNotificacionJudicial(Caso caso, String organismo, Map<String, Object> payload) {
@@ -133,9 +135,9 @@ public class IngestaMapper {
                 if (item instanceof Map<?, ?> docMap) {
                     Map<String, Object> doc = (Map<String, Object>) docMap;
                     caso.getDocumentosAdjuntos().add(new DocumentoAdjunto(
-                            str(doc, "tipo"),
-                            str(doc, "url"),
-                            organismo,
+                            safeText(str(doc, "tipo"), 50),
+                            safeUrl(str(doc, "url")),
+                            safeOrganismo(organismo),
                             instant(doc, "timestamp")));
                 }
             }
@@ -143,9 +145,9 @@ public class IngestaMapper {
 
         caso.getHistorialAcciones().add(new AccionHistorial(
                 "actualizacion_judicial",
-                organismo,
+                safeOrganismo(organismo),
                 Instant.now(),
-                "Actualización judicial recibida de " + organismo));
+                "Actualizacion judicial recibida de " + safeOrganismo(organismo)));
     }
 
     public void mapReporteAvistamiento(Caso caso, String organismo, Map<String, Object> payload) {
@@ -157,8 +159,8 @@ public class IngestaMapper {
         if (lat != null && lng != null) {
             reporte.setUbicacion(new Ubicacion(lng, lat, null));
         }
-        reporte.setDescripcion(str(payload, "descripcion"));
-        reporte.setContacto(str(payload, "contacto"));
+        reporte.setDescripcion(safeText(str(payload, "descripcion"), 500));
+        reporte.setContacto(safeText(str(payload, "contacto"), 100));
 
         String estadoStr = str(payload, "estado");
         reporte.setEstado("verificado".equalsIgnoreCase(estadoStr) ? EstadoReporte.VERIFICADO : EstadoReporte.RECIBIDO);
@@ -167,9 +169,33 @@ public class IngestaMapper {
 
         caso.getHistorialAcciones().add(new AccionHistorial(
                 "reporte_ciudadano_registrado",
-                organismo,
+                safeOrganismo(organismo),
                 Instant.now(),
-                str(payload, "descripcion")));
+                safeText(str(payload, "descripcion"), 500)));
+    }
+
+    // Allows only relative /media/ paths or https URLs on trusted hosts.
+    private static final Pattern SAFE_URL = Pattern.compile(
+            "^(/media/[\\w./-]+|https://(?:findra\\.gob\\.ar|pfa\\.gob\\.ar|sifebu\\.gob\\.ar)/[\\w./-]*)$");
+
+    // Organismo names must be uppercase alphanumeric + underscore, max 32 chars.
+    private static final Pattern SAFE_ORGANISMO = Pattern.compile("^[A-Z0-9_]{1,32}$");
+
+    private String safeUrl(String url) {
+        if (url == null) return null;
+        if (!SAFE_URL.matcher(url).matches()) return null;
+        return url;
+    }
+
+    private String safeOrganismo(String organismo) {
+        if (organismo == null) return "DESCONOCIDO";
+        return SAFE_ORGANISMO.matcher(organismo).matches() ? organismo : "INVALIDO";
+    }
+
+    private String safeText(String text, int maxLen) {
+        if (text == null) return null;
+        String sanitized = text.replaceAll("[\\r\\n\\t]", " ").strip();
+        return sanitized.length() > maxLen ? sanitized.substring(0, maxLen) : sanitized;
     }
 
     private String str(Map<String, Object> m, String key) {
