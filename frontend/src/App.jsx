@@ -640,20 +640,20 @@ function NewCaseView({ onBack, onSubmit }) {
         <div className="panel">
           <h2>Datos del menor</h2>
           <div className="form-grid">
-            <label>Nombre completo *<input required value={form.menorNombre} onChange={(e) => set("menorNombre", e.target.value)} /></label>
-            <label>Edad *<input required type="number" min="0" max="18" value={form.menorEdad} onChange={(e) => set("menorEdad", e.target.value)} /></label>
+            <label>Nombre completo *<input required value={form.menorNombre} onChange={(e) => set("menorNombre", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} /></label>
+            <label>Edad *<input required type="number" min="0" max="18" value={form.menorEdad} onChange={(e) => set("menorEdad", e.target.value)} onKeyDown={(e) => ["e", "E", "+", "-", "."].includes(e.key) && e.preventDefault()} /></label>
             <label>Sexo
               <select value={form.menorSexo} onChange={(e) => set("menorSexo", e.target.value)}>
                 <option value="F">Femenino</option>
                 <option value="M">Masculino</option>
               </select>
             </label>
-            <label>Cabello<input value={form.menorCabello} onChange={(e) => set("menorCabello", e.target.value)} /></label>
-            <label>Ojos<input value={form.menorOjos} onChange={(e) => set("menorOjos", e.target.value)} /></label>
-            <label>Estatura<input value={form.menorEstatura} onChange={(e) => set("menorEstatura", e.target.value)} /></label>
-            <label>Ropa<input value={form.menorRopa} onChange={(e) => set("menorRopa", e.target.value)} /></label>
-            <label>Señas particulares<input value={form.menorSenas} onChange={(e) => set("menorSenas", e.target.value)} /></label>
-            <label>Zona / última ubicación *<input required value={form.zona} onChange={(e) => set("zona", e.target.value)} placeholder="Ej: CABA" /></label>
+            <label>Cabello<input value={form.menorCabello} onChange={(e) => set("menorCabello", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} placeholder="Ej: castaño oscuro" /></label>
+            <label>Ojos<input value={form.menorOjos} onChange={(e) => set("menorOjos", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} placeholder="Ej: marrones" /></label>
+            <label>Estatura (m)<input type="number" step="0.01" min="0.30" max="2.10" placeholder="Ej: 1.52" value={form.menorEstatura} onChange={(e) => set("menorEstatura", e.target.value)} /></label>
+            <label>Ropa<input value={form.menorRopa} onChange={(e) => set("menorRopa", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ ,.-]/g, ""))} placeholder="Ej: camisa azul, jeans" /></label>
+            <label>Señas particulares<input value={form.menorSenas} onChange={(e) => set("menorSenas", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ ,.-]/g, ""))} placeholder="Ej: lunar en mejilla izquierda" /></label>
+            <label>Zona / última ubicación *<input required value={form.zona} onChange={(e) => set("zona", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ ,.-]/g, ""))} placeholder="Ej: CABA" /></label>
             <label>Latitud<input type="number" step="any" value={form.menorLat} onChange={(e) => set("menorLat", e.target.value)} /></label>
             <label>Longitud<input type="number" step="any" value={form.menorLng} onChange={(e) => set("menorLng", e.target.value)} /></label>
           </div>
@@ -662,18 +662,18 @@ function NewCaseView({ onBack, onSubmit }) {
         <div className="panel">
           <h2>Datos del denunciante</h2>
           <div className="form-grid">
-            <label>Nombre *<input required value={form.denuncianteNombre} onChange={(e) => set("denuncianteNombre", e.target.value)} /></label>
-            <label>Vínculo<input value={form.denuncianteVinculo} onChange={(e) => set("denuncianteVinculo", e.target.value)} placeholder="Ej: madre" /></label>
-            <label>Teléfono<input value={form.denuncianteTel} onChange={(e) => set("denuncianteTel", e.target.value)} /></label>
+            <label>Nombre *<input required value={form.denuncianteNombre} onChange={(e) => set("denuncianteNombre", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} /></label>
+            <label>Vínculo<input value={form.denuncianteVinculo} onChange={(e) => set("denuncianteVinculo", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} placeholder="Ej: madre" /></label>
+            <label>Teléfono<input value={form.denuncianteTel} onChange={(e) => set("denuncianteTel", e.target.value.replace(/[^0-9 +()-]/g, ""))} placeholder="Ej: +54 11 1234-5678" /></label>
           </div>
         </div>
 
         <div className="panel">
           <h2>Autoridad judicial</h2>
           <div className="form-grid">
-            <label>N° expediente<input value={form.nroExpediente} onChange={(e) => set("nroExpediente", e.target.value)} /></label>
-            <label>Juez<input value={form.juez} onChange={(e) => set("juez", e.target.value)} /></label>
-            <label>Fiscal<input value={form.fiscal} onChange={(e) => set("fiscal", e.target.value)} /></label>
+            <label>N° expediente<input value={form.nroExpediente} onChange={(e) => set("nroExpediente", e.target.value.replace(/[^A-Za-z0-9/.-]/g, ""))} placeholder="Ej: 2024-12345" /></label>
+            <label>Juez<input value={form.juez} onChange={(e) => set("juez", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} /></label>
+            <label>Fiscal<input value={form.fiscal} onChange={(e) => set("fiscal", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} /></label>
           </div>
         </div>
 
