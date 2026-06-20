@@ -478,7 +478,7 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport 
         <div className="panel alert-manager">
           <div className="panel-title">
             <h2>Gestor de alertas</h2>
-            <button className="primary-button" type="button" onClick={onEmitAlert}>
+            <button className="primary-button" type="button" onClick={onEmitAlert} disabled={caso.estado !== "ACTIVO"}>
               <Bell size={17} aria-hidden="true" />
               Emitir Alerta Sofia
             </button>
