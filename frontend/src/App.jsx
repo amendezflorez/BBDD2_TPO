@@ -18,6 +18,7 @@ import {
   actualizarEstado,
   crearCaso,
   emitirAlertas,
+  fetchAlertas,
   fetchCaso,
   fetchCasos,
   fetchDashboard,
@@ -51,6 +52,9 @@ export function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
+  const [alertasData, setAlertasData] = useState([]);
+  const [selectedAlertaCasoId, setSelectedAlertaCasoId] = useState(null);
+  const [alertasLoading, setAlertasLoading] = useState(false);
 
   useEffect(() => {
     refreshDashboard();
@@ -76,6 +80,19 @@ export function App() {
 
     return () => { cancelled = true; };
   }, [selectedCasoId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadAlertas() {
+    setAlertasLoading(true);
+    try {
+      const data = await fetchAlertas();
+      setAlertasData(data);
+      if (data.length > 0) setSelectedAlertaCasoId(data[0].casoId);
+    } catch (exception) {
+      setError(exception.message);
+    } finally {
+      setAlertasLoading(false);
+    }
+  }
 
   async function refreshDashboard() {
     try {
@@ -176,10 +193,15 @@ export function App() {
         <nav className="nav">
           {navItems.map(([label, Icon]) => (
             <button
-              className={view === "dashboard" && label === "Inicio" ? "active" : ""}
+              className={navIsActive(label, view) ? "active" : ""}
               key={label}
               type="button"
-              onClick={() => setView(label === "Inicio" ? "dashboard" : "search")}
+              onClick={() => {
+                if (label === "Inicio") { setView("dashboard"); }
+                else if (label === "Alertas") { setView("alertas"); loadAlertas(); }
+                else if (label === "Casos") { setView("search"); }
+                else { setView("search"); }
+              }}
               title={label}
             >
               <Icon size={18} aria-hidden="true" />
@@ -266,6 +288,16 @@ export function App() {
                 onQuickReport={handleQuickReport}
               />
             : <div className="loading-detail">Cargando caso...</div>
+        )}
+
+        {view === "alertas" && (
+          <AlertasView
+            alertas={alertasData}
+            loading={alertasLoading}
+            selectedCasoId={selectedAlertaCasoId}
+            onSelect={setSelectedAlertaCasoId}
+            onOpenCase={openDetail}
+          />
         )}
       </main>
 
@@ -846,6 +878,113 @@ function ElapsedClock({ date, large = false }) {
       <Clock3 size={large ? 20 : 15} aria-hidden="true" />
       {elapsed}
     </span>
+  );
+}
+
+function navIsActive(label, view) {
+  if (label === "Inicio") return view === "dashboard";
+  if (label === "Alertas") return view === "alertas";
+  if (label === "Casos") return view === "search" || view === "detail" || view === "new-case";
+  return false;
+}
+
+function formatRelative(value) {
+  const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
+  if (minutes < 60) return `hace ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `hace ${hours}h`;
+  return `hace ${Math.floor(hours / 24)} d`;
+}
+
+function AlertasView({ alertas, loading, selectedCasoId, onSelect, onOpenCase }) {
+  const selected = alertas.find((a) => a.casoId === selectedCasoId);
+
+  return (
+    <section className="alertas-layout">
+      <div className="panel alertas-lista">
+        <div className="panel-title">
+          <div>
+            <span>Módulo de alertas</span>
+            <h2>Casos con alertas</h2>
+          </div>
+          {loading && <span>Cargando...</span>}
+          {!loading && <span>{alertas.length} casos</span>}
+        </div>
+
+        <div className="alertas-personas">
+          {!loading && alertas.length === 0 && (
+            <p style={{ color: "#64717a", padding: "12px 0" }}>No hay alertas registradas.</p>
+          )}
+          {alertas.map((item) => (
+            <button
+              key={item.casoId}
+              className={`alerta-persona-row${selectedCasoId === item.casoId ? " selected" : ""}`}
+              type="button"
+              onClick={() => onSelect(item.casoId)}
+            >
+              <Avatar name={item.menorNombre} />
+              <div className="alerta-persona-info">
+                <strong>{item.menorNombre}</strong>
+                <span>{item.casoId} · {item.zona}</span>
+              </div>
+              <div className="alerta-meta">
+                <span className="alerta-count">{item.totalAlertas}</span>
+                <span className="alerta-tiempo">{formatRelative(item.ultimaAlerta)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel alertas-detalle">
+        {selected ? (
+          <>
+            <div className="alertas-detalle-header">
+              <Avatar name={selected.menorNombre} />
+              <div className="alertas-detalle-header-info">
+                <h2>{selected.menorNombre}</h2>
+                <span>{selected.casoId} · {selected.zona} · {selected.menorEdad} años</span>
+              </div>
+              <div className="alertas-detalle-header-actions">
+                <span className={`estado-badge estado-${selected.estadoCaso}`}>
+                  {selected.estadoCaso}
+                </span>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => onOpenCase(selected.casoId)}
+                >
+                  Ver caso completo →
+                </button>
+              </div>
+            </div>
+
+            <div className="alertas-timeline">
+              {selected.alertas.map((alerta, index) => (
+                <div key={`${alerta.canal}-${index}`} className="alerta-item">
+                  <time>{formatDate(alerta.timestamp)}</time>
+                  <div className="alerta-item-info">
+                    <strong>{alerta.canal}</strong>
+                    <span>{alerta.operador}</span>
+                    {alerta.observaciones && (
+                      <span className="alerta-obs">{alerta.observaciones}</span>
+                    )}
+                  </div>
+                  <span className={`estado-badge estado-${alerta.estado}`}>
+                    {alerta.estado?.replace(/_/g, " ")}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="alertas-placeholder">
+            <AlertTriangle size={40} aria-hidden="true" />
+            <p>Seleccioná un caso para ver sus alertas</p>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

@@ -1,5 +1,6 @@
 package com.findra.service;
 
+import com.findra.dto.AlertaResumenDto;
 import com.findra.dto.EmitirAlertaRequest;
 import com.findra.dto.EstadoCasoRequest;
 import com.findra.dto.ReporteRequest;
@@ -15,8 +16,10 @@ import com.findra.model.Ubicacion;
 import com.findra.repository.CasoRepository;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
@@ -158,6 +161,29 @@ public class CasoService {
                 Instant.now(),
                 request.descripcion()));
         return casoRepository.save(caso);
+    }
+
+    public List<AlertaResumenDto> obtenerResumenAlertas() {
+        Query query = Query.query(Criteria.where("alertas_emitidas.0").exists(true));
+        query.with(Sort.by(Sort.Direction.DESC, "fecha_activacion"));
+
+        return mongoTemplate.find(query, Caso.class).stream()
+                .map(caso -> {
+                    List<Alerta> ordenadas = caso.getAlertasEmitidas().stream()
+                            .sorted(Comparator.comparing(Alerta::getTimestamp).reversed())
+                            .collect(Collectors.toList());
+                    return new AlertaResumenDto(
+                            caso.getCasoId(),
+                            caso.getMenor().getNombre(),
+                            caso.getMenor().getEdad(),
+                            caso.getZona(),
+                            caso.getEstado().name(),
+                            ordenadas,
+                            ordenadas.get(0).getTimestamp(),
+                            ordenadas.size());
+                })
+                .sorted(Comparator.comparing(AlertaResumenDto::ultimaAlerta).reversed())
+                .collect(Collectors.toList());
     }
 
     private String operador(String operador) {
