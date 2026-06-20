@@ -14,6 +14,7 @@ import com.findra.model.ReporteCiudadano;
 import com.findra.model.Ubicacion;
 import com.findra.repository.CasoRepository;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.regex.Pattern;
 import org.springframework.data.domain.PageRequest;
@@ -85,6 +86,11 @@ public class CasoService {
 
     @CacheEvict(value = "dashboard-resumen", allEntries = true)
     public Caso crear(Caso caso) {
+        int year = Instant.now().atOffset(ZoneOffset.UTC).getYear();
+        long siguiente = mongoTemplate.count(
+                Query.query(Criteria.where("caso_id").regex("^AS-" + year + "-")),
+                Caso.class) + 1;
+        caso.setCasoId(String.format("AS-%d-%03d", year, siguiente));
         caso.setFechaActivacion(Instant.now());
         caso.setEstado(EstadoCaso.ACTIVO);
         caso.getHistorialAcciones().add(new AccionHistorial(

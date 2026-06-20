@@ -739,3 +739,12 @@ h2 {
   font-size: 0.875rem;
   background: #fff;
 }
+
+.loading-detail {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 60vh;
+  font-size: 1rem;
+  color: #6b7280;
+}

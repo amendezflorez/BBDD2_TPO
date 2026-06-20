@@ -64,10 +64,18 @@ export function App() {
       return;
     }
 
+    if (selectedCaso?.casoId === selectedCasoId) {
+      return;
+    }
+
+    let cancelled = false;
+    setSelectedCaso(null);
     fetchCaso(selectedCasoId)
-      .then(setSelectedCaso)
-      .catch((exception) => setError(exception.message));
-  }, [selectedCasoId]);
+      .then((data) => { if (!cancelled) setSelectedCaso(data); })
+      .catch((exception) => { if (!cancelled) setError(exception.message); });
+
+    return () => { cancelled = true; };
+  }, [selectedCasoId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function refreshDashboard() {
     try {
@@ -113,9 +121,10 @@ export function App() {
   async function handleCrearCaso(payload) {
     try {
       const created = await crearCaso(payload);
-      await Promise.all([refreshDashboard(), refreshCasos()]);
+      setSelectedCaso(created);
       setSelectedCasoId(created.casoId);
       setView("detail");
+      await Promise.all([refreshDashboard(), refreshCasos()]);
     } catch (exception) {
       setError(exception.message);
     }
@@ -247,14 +256,16 @@ export function App() {
           />
         )}
 
-        {view === "detail" && selectedCaso && (
-          <CaseDetail
-            caso={selectedCaso}
-            onBack={() => setView("search")}
-            onCambiarEstado={handleCambiarEstado}
-            onEmitAlert={() => setModalOpen(true)}
-            onQuickReport={handleQuickReport}
-          />
+        {view === "detail" && (
+          selectedCaso
+            ? <CaseDetail
+                caso={selectedCaso}
+                onBack={() => setView("search")}
+                onCambiarEstado={handleCambiarEstado}
+                onEmitAlert={() => setModalOpen(true)}
+                onQuickReport={handleQuickReport}
+              />
+            : <div className="loading-detail">Cargando caso...</div>
         )}
       </main>
 
