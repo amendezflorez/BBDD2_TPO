@@ -16,12 +16,14 @@ import {
 import {
   actualizarEstado,
   crearCaso,
+  crearUsuario,
   emitirAlertas,
   fetchAlertas,
   fetchCaso,
   fetchCasos,
   fetchDashboard,
   fetchReportes,
+  fetchUsuarios,
   registrarReporte,
 } from "./api.js";
 
@@ -58,6 +60,8 @@ export function App() {
   const [reportesData, setReportesData] = useState([]);
   const [selectedReporteCasoId, setSelectedReporteCasoId] = useState(null);
   const [reportesLoading, setReportesLoading] = useState(false);
+  const [usuariosData, setUsuariosData] = useState([]);
+  const [usuariosLoading, setUsuariosLoading] = useState(false);
 
   useEffect(() => {
     refreshDashboard();
@@ -83,6 +87,27 @@ export function App() {
 
     return () => { cancelled = true; };
   }, [selectedCasoId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadUsuarios() {
+    setUsuariosLoading(true);
+    try {
+      const data = await fetchUsuarios();
+      setUsuariosData(data);
+    } catch (exception) {
+      setError(exception.message);
+    } finally {
+      setUsuariosLoading(false);
+    }
+  }
+
+  async function handleCrearUsuario(payload) {
+    try {
+      const nuevo = await crearUsuario(payload);
+      setUsuariosData((prev) => [...prev, nuevo].sort((a, b) => a.nombre.localeCompare(b.nombre)));
+    } catch (exception) {
+      setError(exception.message);
+    }
+  }
 
   async function loadReportes() {
     setReportesLoading(true);
@@ -217,6 +242,7 @@ export function App() {
                 else if (label === "Alertas") { setView("alertas"); loadAlertas(); }
                 else if (label === "Casos") { setView("search"); }
                 else if (label === "Reportes") { setView("reportes"); loadReportes(); }
+                else if (label === "Usuarios") { setView("usuarios"); loadUsuarios(); }
                 else { setView("search"); }
               }}
               title={label}
@@ -314,6 +340,14 @@ export function App() {
             selectedCasoId={selectedAlertaCasoId}
             onSelect={setSelectedAlertaCasoId}
             onOpenCase={openDetail}
+          />
+        )}
+
+        {view === "usuarios" && (
+          <UsuariosView
+            usuarios={usuariosData}
+            loading={usuariosLoading}
+            onCrear={handleCrearUsuario}
           />
         )}
 
@@ -912,6 +946,7 @@ function navIsActive(label, view) {
   if (label === "Inicio") return view === "dashboard";
   if (label === "Alertas") return view === "alertas";
   if (label === "Reportes") return view === "reportes";
+  if (label === "Usuarios") return view === "usuarios";
   if (label === "Casos") return view === "search" || view === "detail" || view === "new-case";
   return false;
 }
@@ -932,7 +967,7 @@ function AlertasView({ alertas, loading, selectedCasoId, onSelect, onOpenCase })
       <div className="panel alertas-lista">
         <div className="panel-title">
           <div>
-            <span>Módulo de alertas</span>
+
             <h2>Casos con alertas</h2>
           </div>
           {loading && <span>Cargando...</span>}
@@ -1016,6 +1051,115 @@ function AlertasView({ alertas, loading, selectedCasoId, onSelect, onOpenCase })
   );
 }
 
+const ROLES = ["OPERADOR", "FISCAL", "COORDINADOR", "SUPERVISOR"];
+const ORGANISMOS = ["PFA", "GENDARMERIA", "PREFECTURA", "PSA", "SIFEBU", "PROTEX", "MISSING_CHILDREN"];
+
+const ROL_COLOR = {
+  OPERADOR: "estado-ACTIVO",
+  FISCAL: "estado-REQUIERE_AUTORIZACION",
+  COORDINADOR: "estado-ENVIADA",
+  SUPERVISOR: "estado-VERIFICADO",
+};
+
+function UsuariosView({ usuarios, loading, onCrear }) {
+  const [form, setForm] = useState({ nombre: "", rol: "OPERADOR", organismo: "PFA" });
+  const [submitting, setSubmitting] = useState(false);
+
+  function setField(key, value) {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    setSubmitting(true);
+    try {
+      await onCrear({ nombre: form.nombre.trim(), rol: form.rol, organismo: form.organismo });
+      setForm({ nombre: "", rol: "OPERADOR", organismo: "PFA" });
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="alertas-layout">
+      <div className="panel alertas-lista">
+        <div className="panel-title">
+          <div>
+
+            <h2>Operadores registrados</h2>
+          </div>
+          {loading && <span>Cargando...</span>}
+          {!loading && <span>{usuarios.length} usuarios</span>}
+        </div>
+
+        <div className="alertas-personas">
+          {!loading && usuarios.length === 0 && (
+            <p style={{ color: "#64717a", padding: "12px 0" }}>No hay usuarios registrados.</p>
+          )}
+          {usuarios.map((u) => (
+            <div key={u.id} className="alerta-persona-row">
+              <Avatar name={u.nombre} />
+              <div className="alerta-persona-info">
+                <strong>{u.nombre}</strong>
+                <span>{u.organismo}</span>
+              </div>
+              <span className={`estado-badge ${ROL_COLOR[u.rol] ?? ""}`}>{u.rol}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel alertas-detalle">
+        <div className="alertas-detalle-header">
+          <div className="alertas-detalle-header-info">
+            <h2>Registrar nuevo usuario</h2>
+            <span>Alta en la colección usuarios · MongoDB</span>
+          </div>
+        </div>
+
+        <form className="new-case-form" style={{ padding: "0" }} onSubmit={handleSubmit}>
+          <div className="form-grid" style={{ marginTop: "16px" }}>
+            <label>
+              Nombre completo *
+              <input
+                required
+                value={form.nombre}
+                onChange={(e) => setField("nombre", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))}
+                placeholder="Ej: Dra. García, Ana"
+              />
+            </label>
+
+            <label>
+              Rol *
+              <select value={form.rol} onChange={(e) => setField("rol", e.target.value)}>
+                {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </label>
+
+            <label>
+              Organismo *
+              <select value={form.organismo} onChange={(e) => setField("organismo", e.target.value)}>
+                {ORGANISMOS.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            </label>
+          </div>
+
+          <div className="modal-actions" style={{ marginTop: "24px" }}>
+            <button
+              className="primary-button"
+              type="submit"
+              disabled={submitting || !form.nombre.trim()}
+            >
+              <Users size={17} aria-hidden="true" />
+              {submitting ? "Registrando..." : "Registrar usuario"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
 const ESTADO_REPORTE_LABEL = {
   RECIBIDO: "Recibido",
   VERIFICADO: "Verificado",
@@ -1030,7 +1174,7 @@ function ReportesView({ reportes, loading, selectedCasoId, onSelect, onOpenCase 
       <div className="panel alertas-lista">
         <div className="panel-title">
           <div>
-            <span>Módulo de reportes</span>
+
             <h2>Casos con reportes</h2>
           </div>
           {loading && <span>Cargando...</span>}

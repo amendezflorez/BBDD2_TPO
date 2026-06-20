@@ -12,7 +12,9 @@ import com.findra.model.EstadoReporte;
 import com.findra.model.Menor;
 import com.findra.model.ReporteCiudadano;
 import com.findra.model.Ubicacion;
+import com.findra.model.Usuario;
 import com.findra.repository.CasoRepository;
+import com.findra.repository.UsuarioRepository;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -24,17 +26,35 @@ import org.springframework.stereotype.Component;
 public class DataSeeder implements CommandLineRunner {
 
     private final CasoRepository casoRepository;
+    private final UsuarioRepository usuarioRepository;
     private final boolean seedEnabled;
 
     public DataSeeder(CasoRepository casoRepository,
+            UsuarioRepository usuarioRepository,
             @Value("${findra.seed.enabled}") boolean seedEnabled) {
         this.casoRepository = casoRepository;
+        this.usuarioRepository = usuarioRepository;
         this.seedEnabled = seedEnabled;
     }
 
     @Override
     public void run(String... args) {
-        if (!seedEnabled || casoRepository.count() > 0) {
+        if (!seedEnabled) {
+            return;
+        }
+
+        if (usuarioRepository.count() == 0) {
+            usuarioRepository.saveAll(List.of(
+                    usuario("Op. Lopez", "OPERADOR", "PFA"),
+                    usuario("Op. Garcia", "OPERADOR", "SIFEBU"),
+                    usuario("Juez Torres", "FISCAL", "PROTEX"),
+                    usuario("Dra. Rodriguez", "FISCAL", "PROTEX"),
+                    usuario("Coord. Mendez", "COORDINADOR", "SIFEBU"),
+                    usuario("Op. Sanchez", "OPERADOR", "GENDARMERIA"),
+                    usuario("Sup. Vargas", "SUPERVISOR", "PFA")));
+        }
+
+        if (casoRepository.count() > 0) {
             return;
         }
 
@@ -129,6 +149,14 @@ public class DataSeeder implements CommandLineRunner {
         reporte.setEstado(EstadoReporte.VERIFICADO);
         reporte.setContacto("linea 134");
         return reporte;
+    }
+
+    private Usuario usuario(String nombre, String rol, String organismo) {
+        Usuario u = new Usuario();
+        u.setNombre(nombre);
+        u.setRol(rol);
+        u.setOrganismo(organismo);
+        return u;
     }
 
     private long offset(long elapsedMinutes, long requestedOffset) {
