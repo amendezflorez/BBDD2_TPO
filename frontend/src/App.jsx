@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import L from "leaflet";
 import {
   AlertTriangle,
   Bell,
@@ -859,44 +861,69 @@ function CaseTable({ cases, onOpenCase }) {
   );
 }
 
-// Bounding box Argentina: lng [-73, -53], lat [-55, -22]
-const ARG_LNG_MIN = -73, ARG_LNG_MAX = -53;
-const ARG_LAT_MIN = -55, ARG_LAT_MAX = -22;
+const ARGENTINA_CENTER = [-38.4, -63.6];
 
-function geoToPercent(coordinates) {
-  if (!Array.isArray(coordinates) || coordinates.length < 2) return null;
-  const [lng, lat] = coordinates;
-  const left = ((lng - ARG_LNG_MIN) / (ARG_LNG_MAX - ARG_LNG_MIN)) * 100;
-  // lat is inverted: higher lat = lower top value
-  const top = ((ARG_LAT_MAX - lat) / (ARG_LAT_MAX - ARG_LAT_MIN)) * 100;
-  return { left: Math.min(Math.max(left, 2), 96), top: Math.min(Math.max(top, 2), 96) };
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
+
+function pinIcon(hasAlert) {
+  return L.divIcon({
+    className: "",
+    html: `<div style="width:16px;height:16px;border-radius:50%;background:${hasAlert ? "#e05f43" : "#7fa35a"};border:2.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.28)"></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8],
+    popupAnchor: [0, -10],
+  });
+}
+
+function MapRecenter({ lat, lng, zoom }) {
+  const map = useMap();
+  useEffect(() => { map.setView([lat, lng], zoom); }, [lat, lng, zoom, map]);
+  return null;
 }
 
 function GeoPanel({ cases, detail = false }) {
+  const firstCoords = cases[0]?.menor?.ultimaUbicacion?.coordinates;
+  const center = detail && firstCoords ? [firstCoords[1], firstCoords[0]] : ARGENTINA_CENTER;
+  const zoom = detail ? 14 : 5;
+
   return (
     <div className={`panel map-panel ${detail ? "map-detail" : ""}`}>
       <div className="panel-title">
         <h2>{detail ? "Ultima ubicacion conocida" : "Mapa de casos"}</h2>
-        <span>Vista nacional</span>
+        <span>{detail ? "Ultima posicion registrada" : "Vista nacional"}</span>
       </div>
-      <div className="map-canvas">
-        {cases.slice(0, 7).map((caso) => {
+      <MapContainer
+        center={center}
+        zoom={zoom}
+        style={{ height: "286px", borderRadius: "8px" }}
+        scrollWheelZoom={false}
+      >
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        />
+        {detail && <MapRecenter lat={center[0]} lng={center[1]} zoom={zoom} />}
+        {cases.map((caso) => {
           const coords = caso.menor?.ultimaUbicacion?.coordinates;
-          const pos = geoToPercent(coords);
-          if (!pos) return null;
+          if (!Array.isArray(coords) || coords.length < 2) return null;
+          const [lng, lat] = coords;
+          const hasAlert = list(caso.alertasEmitidas).length > 0;
           return (
-            <button
-              className={list(caso.alertasEmitidas).length > 0 ? "map-pin alert" : "map-pin"}
-              key={caso.casoId}
-              style={{ left: `${pos.left}%`, top: `${pos.top}%` }}
-              title={`${caso.casoId} · ${caso.zona}`}
-              type="button"
-            >
-              <MapPinned size={16} aria-hidden="true" />
-            </button>
+            <Marker key={caso.casoId} position={[lat, lng]} icon={pinIcon(hasAlert)}>
+              <Popup>
+                <strong>{caso.menor.nombre}</strong>
+                <br />
+                {caso.zona} · {caso.casoId}
+              </Popup>
+            </Marker>
           );
         })}
-      </div>
+      </MapContainer>
       <div className="legend">
         <span><i className="dot alert-dot" />Con alerta emitida</span>
         <span><i className="dot" />Sin alerta</span>
