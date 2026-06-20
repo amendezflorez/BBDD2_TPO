@@ -8,7 +8,6 @@ import {
   Filter,
   Home,
   MapPinned,
-  Menu,
   Search,
   Shield,
   Users,
@@ -22,6 +21,7 @@ import {
   fetchCaso,
   fetchCasos,
   fetchDashboard,
+  fetchReportes,
   registrarReporte,
 } from "./api.js";
 
@@ -38,7 +38,7 @@ const navItems = [
   ["Casos", CircleDot],
   ["Alertas", AlertTriangle],
   ["Mapa", MapPinned],
-  ["Reportes", Menu],
+  ["Reportes", FileText],
   ["Usuarios", Users],
 ];
 
@@ -55,6 +55,9 @@ export function App() {
   const [alertasData, setAlertasData] = useState([]);
   const [selectedAlertaCasoId, setSelectedAlertaCasoId] = useState(null);
   const [alertasLoading, setAlertasLoading] = useState(false);
+  const [reportesData, setReportesData] = useState([]);
+  const [selectedReporteCasoId, setSelectedReporteCasoId] = useState(null);
+  const [reportesLoading, setReportesLoading] = useState(false);
 
   useEffect(() => {
     refreshDashboard();
@@ -80,6 +83,19 @@ export function App() {
 
     return () => { cancelled = true; };
   }, [selectedCasoId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function loadReportes() {
+    setReportesLoading(true);
+    try {
+      const data = await fetchReportes();
+      setReportesData(data);
+      if (data.length > 0) setSelectedReporteCasoId(data[0].casoId);
+    } catch (exception) {
+      setError(exception.message);
+    } finally {
+      setReportesLoading(false);
+    }
+  }
 
   async function loadAlertas() {
     setAlertasLoading(true);
@@ -200,6 +216,7 @@ export function App() {
                 if (label === "Inicio") { setView("dashboard"); }
                 else if (label === "Alertas") { setView("alertas"); loadAlertas(); }
                 else if (label === "Casos") { setView("search"); }
+                else if (label === "Reportes") { setView("reportes"); loadReportes(); }
                 else { setView("search"); }
               }}
               title={label}
@@ -296,6 +313,16 @@ export function App() {
             loading={alertasLoading}
             selectedCasoId={selectedAlertaCasoId}
             onSelect={setSelectedAlertaCasoId}
+            onOpenCase={openDetail}
+          />
+        )}
+
+        {view === "reportes" && (
+          <ReportesView
+            reportes={reportesData}
+            loading={reportesLoading}
+            selectedCasoId={selectedReporteCasoId}
+            onSelect={setSelectedReporteCasoId}
             onOpenCase={openDetail}
           />
         )}
@@ -884,6 +911,7 @@ function ElapsedClock({ date, large = false }) {
 function navIsActive(label, view) {
   if (label === "Inicio") return view === "dashboard";
   if (label === "Alertas") return view === "alertas";
+  if (label === "Reportes") return view === "reportes";
   if (label === "Casos") return view === "search" || view === "detail" || view === "new-case";
   return false;
 }
@@ -981,6 +1009,104 @@ function AlertasView({ alertas, loading, selectedCasoId, onSelect, onOpenCase })
           <div className="alertas-placeholder">
             <AlertTriangle size={40} aria-hidden="true" />
             <p>Seleccioná un caso para ver sus alertas</p>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+const ESTADO_REPORTE_LABEL = {
+  RECIBIDO: "Recibido",
+  VERIFICADO: "Verificado",
+  DESCARTADO: "Descartado",
+};
+
+function ReportesView({ reportes, loading, selectedCasoId, onSelect, onOpenCase }) {
+  const selected = reportes.find((r) => r.casoId === selectedCasoId);
+
+  return (
+    <section className="alertas-layout">
+      <div className="panel alertas-lista">
+        <div className="panel-title">
+          <div>
+            <span>Módulo de reportes</span>
+            <h2>Casos con reportes</h2>
+          </div>
+          {loading && <span>Cargando...</span>}
+          {!loading && <span>{reportes.length} casos</span>}
+        </div>
+
+        <div className="alertas-personas">
+          {!loading && reportes.length === 0 && (
+            <p style={{ color: "#64717a", padding: "12px 0" }}>No hay reportes ciudadanos registrados.</p>
+          )}
+          {reportes.map((item) => (
+            <button
+              key={item.casoId}
+              className={`alerta-persona-row${selectedCasoId === item.casoId ? " selected" : ""}`}
+              type="button"
+              onClick={() => onSelect(item.casoId)}
+            >
+              <Avatar name={item.menorNombre} />
+              <div className="alerta-persona-info">
+                <strong>{item.menorNombre}</strong>
+                <span>{item.casoId} · {item.zona}</span>
+              </div>
+              <div className="alerta-meta">
+                <span className="alerta-count">{item.totalReportes}</span>
+                <span className="alerta-tiempo">{formatRelative(item.ultimoReporte)}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="panel alertas-detalle">
+        {selected ? (
+          <>
+            <div className="alertas-detalle-header">
+              <Avatar name={selected.menorNombre} />
+              <div className="alertas-detalle-header-info">
+                <h2>{selected.menorNombre}</h2>
+                <span>{selected.casoId} · {selected.zona} · {selected.menorEdad} años</span>
+              </div>
+              <div className="alertas-detalle-header-actions">
+                <span className={`estado-badge estado-${selected.estadoCaso}`}>
+                  {selected.estadoCaso}
+                </span>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => onOpenCase(selected.casoId)}
+                >
+                  Ver caso completo →
+                </button>
+              </div>
+            </div>
+
+            <div className="alertas-timeline">
+              {selected.reportes.map((reporte, index) => (
+                <div key={`${reporte.timestamp}-${index}`} className="alerta-item">
+                  <time>{formatDate(reporte.timestamp)}</time>
+                  <div className="alerta-item-info">
+                    <strong>{reporte.descripcion}</strong>
+                    {reporte.contacto && <span>Contacto: {reporte.contacto}</span>}
+                    {reporte.ubicacion?.descripcion && (
+                      <span className="alerta-obs">{reporte.ubicacion.descripcion}</span>
+                    )}
+                  </div>
+                  <span className={`estado-badge estado-${reporte.estado}`}>
+                    {ESTADO_REPORTE_LABEL[reporte.estado] ?? reporte.estado}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="alertas-placeholder">
+            <FileText size={40} aria-hidden="true" />
+            <p>Seleccioná un caso para ver sus reportes</p>
           </div>
         )}
       </div>

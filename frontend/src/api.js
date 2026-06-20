@@ -25,6 +25,10 @@ export function fetchAlertas() {
   return request("/alertas");
 }
 
+export function fetchReportes() {
+  return request("/reportes");
+}
+
 export function fetchCasos(filters = {}) {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => {

@@ -2,6 +2,7 @@ package com.findra.service;
 
 import com.findra.dto.AlertaResumenDto;
 import com.findra.dto.EmitirAlertaRequest;
+import com.findra.dto.ReporteResumenDto;
 import com.findra.dto.EstadoCasoRequest;
 import com.findra.dto.ReporteRequest;
 import com.findra.exception.NotFoundException;
@@ -183,6 +184,29 @@ public class CasoService {
                             ordenadas.size());
                 })
                 .sorted(Comparator.comparing(AlertaResumenDto::ultimaAlerta).reversed())
+                .collect(Collectors.toList());
+    }
+
+    public List<ReporteResumenDto> obtenerResumenReportes() {
+        Query query = Query.query(Criteria.where("reportes_ciudadanos.0").exists(true));
+        query.with(Sort.by(Sort.Direction.DESC, "fecha_activacion"));
+
+        return mongoTemplate.find(query, Caso.class).stream()
+                .map(caso -> {
+                    List<ReporteCiudadano> ordenados = caso.getReportesCiudadanos().stream()
+                            .sorted(Comparator.comparing(ReporteCiudadano::getTimestamp).reversed())
+                            .collect(Collectors.toList());
+                    return new ReporteResumenDto(
+                            caso.getCasoId(),
+                            caso.getMenor().getNombre(),
+                            caso.getMenor().getEdad(),
+                            caso.getZona(),
+                            caso.getEstado().name(),
+                            ordenados,
+                            ordenados.get(0).getTimestamp(),
+                            ordenados.size());
+                })
+                .sorted(Comparator.comparing(ReporteResumenDto::ultimoReporte).reversed())
                 .collect(Collectors.toList());
     }
 
