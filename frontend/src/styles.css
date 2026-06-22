@@ -957,3 +957,141 @@ h2 {
     justify-self: start;
   }
 }
+
+/* ── Módulo Mapa ────────────────────────────────────────── */
+.map-view-layout {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+  height: calc(100vh - 120px);
+}
+
+.map-cases-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.map-cases-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.map-case-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #e1e8ed;
+  border-radius: 8px;
+  background: #fbfcfd;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.map-case-item:hover {
+  border-color: #6a9caf;
+  background: #f0f7fa;
+  transform: translateY(-1px);
+}
+
+.map-case-item.selected {
+  border-color: #1d4f5f;
+  background: #e8f2f6;
+  box-shadow: 0 4px 12px rgba(29, 79, 95, 0.15);
+}
+
+.map-case-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.map-case-info strong {
+  display: block;
+}
+
+.map-case-info span {
+  display: block;
+  font-size: 0.82rem;
+  color: #64717a;
+}
+
+.map-case-badge {
+  flex-shrink: 0;
+}
+
+.active-chip {
+  justify-content: center;
+  min-width: 74px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: #e3f1fb;
+  color: #1a5f8a;
+  font-size: 0.78rem;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+}
+
+.map-full-panel {
+  height: 100%;
+  padding: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.map-popup-content {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: inherit;
+}
+
+.popup-details {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.popup-details strong {
+  font-size: 0.95rem;
+  color: #12343f;
+}
+
+.popup-details span {
+  font-size: 0.8rem;
+  color: #64717a;
+}
+
+.popup-link-button {
+  border: 0;
+  background: transparent;
+  color: #d94f36;
+  font-weight: 700;
+  font-size: 0.85rem;
+  padding: 4px 0 0 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.popup-link-button:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 960px) {
+  .map-view-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .map-cases-list {
+    max-height: 320px;
+  }
+}

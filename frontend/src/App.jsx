@@ -243,6 +243,7 @@ export function App() {
                 if (label === "Inicio") { setView("dashboard"); }
                 else if (label === "Alertas") { setView("alertas"); loadAlertas(); }
                 else if (label === "Casos") { setView("search"); }
+                else if (label === "Mapa") { setView("map"); }
                 else if (label === "Reportes") { setView("reportes"); loadReportes(); }
                 else if (label === "Usuarios") { setView("usuarios"); loadUsuarios(); }
                 else { setView("search"); }
@@ -362,6 +363,13 @@ export function App() {
             onOpenCase={openDetail}
           />
         )}
+
+        {view === "map" && (
+          <MapView
+            activeCases={activeCases}
+            onOpenCase={openDetail}
+          />
+        )}
       </main>
 
       {modalOpen && selectedCaso && (
@@ -412,7 +420,7 @@ function Dashboard({ activeCases, cases, dashboard, loading, onCreateCase, onOpe
           </div>
           <CaseTable cases={activeCases} onOpenCase={onOpenCase} />
         </div>
-        <GeoPanel cases={cases} />
+        <GeoPanel cases={activeCases} />
       </div>
     </section>
   );
@@ -974,6 +982,7 @@ function navIsActive(label, view) {
   if (label === "Alertas") return view === "alertas";
   if (label === "Reportes") return view === "reportes";
   if (label === "Usuarios") return view === "usuarios";
+  if (label === "Mapa") return view === "map";
   if (label === "Casos") return view === "search" || view === "detail" || view === "new-case";
   return false;
 }
@@ -1303,4 +1312,112 @@ function formatTime(value) {
 
 function list(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function MapView({ activeCases, onOpenCase }) {
+  const [selectedCase, setSelectedCase] = useState(null);
+  const [mapCenter, setMapCenter] = useState(ARGENTINA_CENTER);
+  const [mapZoom, setMapZoom] = useState(5);
+
+  const handleSelectCase = (caso) => {
+    setSelectedCase(caso);
+    const coords = caso.menor?.ultimaUbicacion?.coordinates;
+    if (Array.isArray(coords) && coords.length >= 2) {
+      setMapCenter([coords[1], coords[0]]);
+      setMapZoom(13);
+    }
+  };
+
+  return (
+    <section className="map-view-layout">
+      <aside className="map-cases-sidebar panel">
+        <div className="panel-title">
+          <div>
+            <h2>Casos activos</h2>
+            <span>{activeCases.length} localizaciones</span>
+          </div>
+        </div>
+        <div className="map-cases-list">
+          {activeCases.map((caso) => {
+            const hasAlert = list(caso.alertasEmitidas).length > 0;
+            const isSelected = selectedCase?.casoId === caso.casoId;
+            return (
+              <button
+                key={caso.casoId}
+                className={`map-case-item ${isSelected ? "selected" : ""}`}
+                type="button"
+                onClick={() => handleSelectCase(caso)}
+              >
+                <Avatar name={caso.menor.nombre} />
+                <div className="map-case-info">
+                  <strong>{caso.menor.nombre}</strong>
+                  <span>{caso.zona}</span>
+                </div>
+                <div className="map-case-badge">
+                  {hasAlert ? <span className="alert-chip">Alerta</span> : <span className="active-chip">Activo</span>}
+                </div>
+              </button>
+            );
+          })}
+          {activeCases.length === 0 && (
+            <p style={{ color: "#64717a", textAlign: "center", padding: "20px 0" }}>
+              No hay casos activos con ubicación.
+            </p>
+          )}
+        </div>
+      </aside>
+
+      <div className="panel map-full-panel">
+        <MapContainer
+          center={mapCenter}
+          zoom={mapZoom}
+          style={{ height: "100%", width: "100%", borderRadius: "8px" }}
+          scrollWheelZoom={true}
+        >
+          <TileLayer
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          />
+          <MapRecenter lat={mapCenter[0]} lng={mapCenter[1]} zoom={mapZoom} />
+          {activeCases.map((caso) => {
+            const coords = caso.menor?.ultimaUbicacion?.coordinates;
+            if (!Array.isArray(coords) || coords.length < 2) return null;
+            const [lng, lat] = coords;
+            const hasAlert = list(caso.alertasEmitidas).length > 0;
+            return (
+              <Marker
+                key={caso.casoId}
+                position={[lat, lng]}
+                icon={pinIcon(hasAlert)}
+                eventHandlers={{
+                  click: () => {
+                    setSelectedCase(caso);
+                  },
+                }}
+              >
+                <Popup>
+                  <div className="map-popup-content">
+                    <Avatar name={caso.menor.nombre} />
+                    <div className="popup-details">
+                      <strong>{caso.menor.nombre}</strong>
+                      <span>{caso.casoId}</span>
+                      <span>Edad: {caso.menor.edad} años</span>
+                      <span>Provincia: {caso.zona}</span>
+                      <button
+                        className="popup-link-button"
+                        type="button"
+                        onClick={() => onOpenCase(caso.casoId)}
+                      >
+                        Ver detalles →
+                      </button>
+                    </div>
+                  </div>
+                </Popup>
+              </Marker>
+            );
+          })}
+        </MapContainer>
+      </div>
+    </section>
+  );
 }

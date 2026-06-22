@@ -44,6 +44,20 @@ npm install
 npm run dev
 ```
 
+En Windows con PowerShell, si aparece el error de `npm.ps1` no firmado, usa una de estas opciones:
+
+```powershell
+cd frontend
+npm.cmd run dev
+```
+
+o bien:
+
+```powershell
+cd frontend
+./start-dev.ps1
+```
+
 URLs principales:
 
 - Frontend: `http://localhost:5173`
