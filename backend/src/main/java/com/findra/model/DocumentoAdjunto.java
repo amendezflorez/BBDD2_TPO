@@ -14,18 +14,17 @@ public class DocumentoAdjunto {
     @Field("grid_fs_id")
     private String gridFsId;
 
-    @Field("subido_por")
-    private String subidoPor;
+    private String organismo;
 
     private Instant timestamp;
 
     public DocumentoAdjunto() {
     }
 
-    public DocumentoAdjunto(String tipo, String url, String subidoPor, Instant timestamp) {
+    public DocumentoAdjunto(String tipo, String url, String organismo, Instant timestamp) {
         this.tipo = tipo;
         this.url = url;
-        this.subidoPor = subidoPor;
+        this.organismo = organismo;
         this.timestamp = timestamp;
     }
 
@@ -53,12 +52,12 @@ public class DocumentoAdjunto {
         this.gridFsId = gridFsId;
     }
 
-    public String getSubidoPor() {
-        return subidoPor;
+    public String getOrganismo() {
+        return organismo;
     }
 
-    public void setSubidoPor(String subidoPor) {
-        this.subidoPor = subidoPor;
+    public void setOrganismo(String organismo) {
+        this.organismo = organismo;
     }
 
     public Instant getTimestamp() {

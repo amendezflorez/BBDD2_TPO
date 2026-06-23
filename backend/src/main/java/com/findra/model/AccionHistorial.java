@@ -1,20 +1,24 @@
 package com.findra.model;
 
 import java.time.Instant;
+import org.springframework.data.mongodb.core.mapping.Field;
 
 public class AccionHistorial {
 
     private String accion;
-    private String usuario;
+
+    @Field("operador")
+    private String operador;
+
     private Instant timestamp;
     private String detalle;
 
     public AccionHistorial() {
     }
 
-    public AccionHistorial(String accion, String usuario, Instant timestamp, String detalle) {
+    public AccionHistorial(String accion, String operador, Instant timestamp, String detalle) {
         this.accion = accion;
-        this.usuario = usuario;
+        this.operador = operador;
         this.timestamp = timestamp;
         this.detalle = detalle;
     }
@@ -27,12 +31,12 @@ public class AccionHistorial {
         this.accion = accion;
     }
 
-    public String getUsuario() {
-        return usuario;
+    public String getOperador() {
+        return operador;
     }
 
-    public void setUsuario(String usuario) {
-        this.usuario = usuario;
+    public void setOperador(String operador) {
+        this.operador = operador;
     }
 
     public Instant getTimestamp() {

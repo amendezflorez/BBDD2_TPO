@@ -26,7 +26,7 @@ public class MongoIndexConfig {
                 .on("fecha_activacion", Direction.DESC));
         indexes.ensureIndex(new Index().on("menor.edad", Direction.ASC)
                 .on("menor.sexo", Direction.ASC));
-        indexes.ensureIndex(new Index().on("historial_acciones.usuario", Direction.ASC));
+        indexes.ensureIndex(new Index().on("historial_acciones.operador", Direction.ASC));
         indexes.ensureIndex(new CompoundIndexDefinition(
                 new Document("menor.ultima_ubicacion", "2dsphere")));
         indexes.ensureIndex(new CompoundIndexDefinition(
