@@ -8,9 +8,11 @@ import com.findra.model.EstadoCaso;
 import com.findra.service.CasoService;
 import jakarta.validation.Valid;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import org.springframework.core.io.Resource;
 import org.springframework.data.mongodb.gridfs.GridFsResource;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -101,7 +103,8 @@ public class CasoController {
                 : MediaType.APPLICATION_OCTET_STREAM;
         return ResponseEntity.ok()
                 .contentType(mediaType)
-                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+                .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
+                        .filename(resource.getFilename(), StandardCharsets.UTF_8).build().toString())
                 .body(resource);
     }
 }
