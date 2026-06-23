@@ -194,6 +194,7 @@ db.casos.createIndex({ "historial_acciones.operador": 1 })
 | Búsqueda geoespacial | Índices 2dsphere nativos sobre coordenadas anidadas |
 | Trazabilidad de acciones | Array `historial_acciones` ordenado cronológicamente dentro del mismo documento |
 | Consistencia en escrituras críticas | Escrituras atómicas a nivel documento; sin transacciones multi-colección necesarias |
+| Ciclo de vida del caso | `estado` (ACTIVO → RESUELTO / ARCHIVADO) + `fecha_cierre` asignada automáticamente en la transición de cierre |
 
 ### 3.4 Diagrama del modelo de datos
 
@@ -323,8 +324,8 @@ Operador emite Alerta Sofía
     → @CacheEvict: invalida dashboard-resumen en Redis
 
 Operador cierra o archiva caso
-  → PATCH /api/casos/{id}/estado  {estado: "CERRADO", resultado: "..."}
-    → CasoService: actualiza estado + fechaCierre + $push historialAcciones
+  → PATCH /api/casos/{id}/estado  {estado: "RESUELTO"|"ARCHIVADO", resultado: "..."}
+    → CasoService: actualiza estado + fecha_cierre (Instant.now()) + $push historialAcciones
     → @CacheEvict: invalida dashboard-resumen en Redis
 ```
 
@@ -354,9 +355,9 @@ Ejecución: `cd backend && mvn test`
 
 ### 7.2 Análisis de dependencias del sistema
 
-Se realizó un análisis estático completo del repositorio para validar la cohesión arquitectónica del código implementado. El grafo resultante comprende **396 nodos** (364 archivos de código + 32 conceptos y documentos) y **667 relaciones**, agrupados en **32 comunidades** detectadas mediante el algoritmo de Louvain.
+Se realizó un análisis estático completo del repositorio para validar la cohesión arquitectónica del código implementado. El grafo resultante comprende **622 nodos** (522 extraídos por AST + 100 conceptos semánticos de documentación) y **1.097 relaciones**, agrupados en **50 comunidades** detectadas mediante el algoritmo de Louvain.
 
-Las 32 comunidades se corresponden directamente con las capas de la arquitectura: controllers, services, mappers, modelos, DTOs, repositorios, configuración y frontend. La densidad de relaciones (~1.7 relaciones por nodo) es consistente con un sistema modular donde cada clase tiene responsabilidades acotadas.
+Las 50 comunidades se corresponden directamente con las capas de la arquitectura: controllers, services, mappers, modelos, DTOs, repositorios, configuración y frontend. La densidad de relaciones (~1.76 relaciones por nodo) es consistente con un sistema modular donde cada clase tiene responsabilidades acotadas.
 
 **[FIGURA — Grafo de dependencias del sistema]**
 *Grafo generado por análisis AST estático del repositorio. Cada nodo es un archivo o concepto; los colores indican la comunidad (módulo lógico) al que pertenece. El grafo completo e interactivo está disponible en `docs/graph.html`.*
@@ -427,13 +428,14 @@ k6 run docs/k6-stress-test.js
 
 ### 7.4 Seguridad en la capa de ingesta
 
-Tres vulnerabilidades identificadas y corregidas en la capa de ingesta multi-organismo:
+Cuatro vulnerabilidades identificadas y corregidas durante la implementación:
 
 | Issue | Severidad | Descripción | Fix implementado |
 |---|---|---|---|
-| Organismo autodeclarado | Alta | El campo `organismo` del request podía ser cualquier string | Validación contra enum `OrganismoFuente` en `IngestaService` |
-| URLs sin validar | Media | `fotoUrl` y `url` de documentos podían contener esquemas `javascript:` o `data:` | Patrón `SAFE_URL` en `IngestaMapper.safeUrl()` |
+| Organismo autodeclarado | Alta | El campo `organismo` del request podía ser cualquier string, incluido en `UsuarioService` | Validación contra enum `OrganismoFuente` en `IngestaService` y `UsuarioService` |
+| URLs sin validar | Media | `fotoUrl` y `url` de documentos podían contener esquemas `javascript:` o `data:` | Patrón `SAFE_URL` en `IngestaMapper.safeUrl()` — solo permite rutas `/media/` o HTTPS en dominios `.gob.ar` |
 | Inyección en auditoría | Media | Campos de texto libre del historial podían contener `\r\n` para falsear logs | `safeOrganismo()` + `safeText()` aplicados a todos los campos del historial |
+| Header injection en descarga | Media | `Content-Disposition` construido con `filename` del archivo sin escapar, permitiendo inyección de headers HTTP | Reemplazado por `ContentDisposition.inline().filename(..., UTF_8)` (RFC 6266) en `CasoController` |
 
 ---
 
@@ -471,14 +473,16 @@ Durante la implementación se tomaron decisiones pragmáticas que ajustan el dis
 
 **Justificación:** El foco del TP es el pipeline de datos NoSQL, no la seguridad de acceso. La entidad `Usuario` está modelada; integrar JWT/OAuth2 es extensión directa sin cambios de esquema.
 
-### 8.4 Documentos adjuntos: binarios → metadata estructurada
+### 8.4 Documentos adjuntos: S3/CDN → GridFS embebido en MongoDB
 
 | | Diseño inicial | Implementación final |
 |---|---|---|
-| Almacenamiento | Upload de documentos y fotos | Metadata estructurada (tipo, url, organismo, timestamp) |
-| Motor | GridFS o S3 | No aplica — URL apunta a ruta relativa `/media/` |
+| Almacenamiento | Upload a S3 o CDN externo | GridFS nativo de MongoDB |
+| Referencia en documento | URL absoluta a storage externo | `grid_fs_id` (ObjectId) + nombre original en `url` |
+| Endpoints | No especificados | `POST /api/casos/{id}/documentos` · `GET /api/casos/{id}/documentos/{gridFsId}` |
+| Seguridad | No especificada | `Content-Disposition` codificado con RFC 6266 para prevenir header injection |
 
-**Justificación:** El almacenamiento binario requiere infraestructura adicional (GridFS, S3, CDN) fuera del alcance del MVP. El modelo de metadata preserva la estructura completa y permite integrar almacenamiento real sin cambios de esquema ni migración.
+**Justificación:** GridFS es el mecanismo nativo de MongoDB para almacenar binarios mayores a 16 MB, sin dependencias de infraestructura externa. El documento `Caso` guarda únicamente el `grid_fs_id` como referencia — el binario vive en la colección `fs.chunks` — lo que mantiene el documento principal liviano y la descarga bajo demanda. Esta decisión preserva la consistencia dentro del mismo motor sin requerir S3 ni CDN en el entorno de evaluación.
 
 ### 8.5 Replica Set: 3 nodos en producción → instancia única en desarrollo
 
@@ -532,11 +536,291 @@ FINDRA en su versión final de entrega cumple los objetivos planteados en el dis
 - **Modelo de datos optimizado:** embedding completo en documento `Caso`, índices geoespaciales 2dsphere y aggregation pipeline para métricas del dashboard.
 - **Caché reactiva:** Redis invalida el resumen del dashboard ante cualquier escritura, garantizando consistencia sin polling.
 - **Arquitectura escalable documentada:** Replica Set rs0 de 3 nodos listo para activar en producción con cambio de variable de entorno.
-- **Seguridad en la capa de ingesta:** validación de organismo por enum, sanitización de URLs y textos en el historial de auditoría.
-- **Calidad verificada:** 5 tests unitarios de servicio, análisis estático de 396 nodos / 667 relaciones / 32 comunidades coherentes con la arquitectura diseñada.
+- **Seguridad en profundidad:** validación de organismo por enum en ingesta y gestión de usuarios, sanitización de URLs, protección contra inyección en auditoría y header injection en descarga de documentos (RFC 6266).
+- **Calidad verificada:** 5 tests unitarios de servicio, análisis estático de 622 nodos / 1.097 relaciones / 50 comunidades coherentes con la arquitectura diseñada.
 - **Performance documentada:** estrategia de stress testing con k6, escenarios definidos y resultados esperados que demuestran el impacto de Redis en el throughput del sistema.
 
 Los trade-offs documentados en la sección 8 demuestran que cada desviación respecto al diseño original fue una decisión técnica deliberada con justificación explícita, no una omisión. La arquitectura está preparada para evolucionar hacia producción sin cambios estructurales en el código.
+
+---
+
+## 11. Reflexión sobre el Sistema Construido
+
+### 11.1 Qué construimos y por qué importa
+
+FINDRA es una plataforma operativa de gestión de emergencias para el Protocolo Alerta Sofía. No es una demostración conceptual ni un CRUD académico: es un sistema que modela con fidelidad el problema real que enfrenta el Estado argentino cuando desaparece un menor — la fragmentación de organismos, la heterogeneidad de los datos y la urgencia del tiempo.
+
+El valor central de FINDRA reside en la unificación. Siete organismos con sistemas independientes (PFA, Gendarmería, Prefectura, PSA, SIFEBU, PROTEX, Missing Children) pueden convergir sobre un único documento `Caso` en MongoDB, enriqueciéndolo de forma incremental sin sobrescribir el trabajo del otro. Esa coordinación, que hoy tarda horas por procesos burocráticos, en FINDRA ocurre en milisegundos.
+
+### 11.2 Funcionalidades implementadas
+
+| Funcionalidad | Descripción |
+|---|---|
+| **Dashboard en tiempo real** | Métricas de casos activos, alertas emitidas, resueltos del mes. Respuesta < 5ms con Redis activo. |
+| **Registro de casos** | Formulario completo con datos biométricos del menor (nombre, edad, sexo, cabello, ojos, estatura, peso, ropa, señas), datos del denunciante, autoridad judicial, adjuntos y coordenadas GPS. |
+| **Buscador con filtros** | Búsqueda por texto libre, estado del caso, zona geográfica y rango de edad. Paginado y ordenado por fecha de activación. |
+| **Detalle de caso** | Ficha completa con mapa de última ubicación conocida (OpenStreetMap con coordenadas reales de MongoDB), gestor de alertas, documentos adjuntos descargables y línea de tiempo de acciones. |
+| **Emisión de Alerta Sofía** | Selección de canales (SMS masivo, redes sociales, cadena nacional, app ciudadana), observaciones y flag de autorización judicial pendiente. |
+| **Ciclo de vida del caso** | Transiciones de estado ACTIVO → RESUELTO / ARCHIVADO con registro automático de `fecha_cierre` y entrada en el historial. |
+| **Documentos adjuntos (GridFS)** | Upload de evidencia (imágenes, PDF, DOC) almacenada en GridFS nativo de MongoDB. Descarga directa desde la UI con `Content-Disposition` seguro (RFC 6266). |
+| **Ingesta multi-organismo** | Endpoint unificado `POST /api/ingesta/organismo` con validación de origen, sanitización de datos y enriquecimiento incremental del caso. |
+| **Reportes ciudadanos** | Registro de avistamientos con geolocalización, contacto y estado (RECIBIDO / VERIFICADO / DESCARTADO). |
+| **Mapa interactivo nacional** | Vista cartográfica con todos los casos activos sobre OpenStreetMap. Sidebar navegable, popups con acceso directo al detalle. |
+| **Gestión de usuarios** | Alta de operadores con rol (OPERADOR / FISCAL / COORDINADOR / SUPERVISOR) y organismo validado contra el enum de fuentes. |
+| **Auditoría completa** | Cada acción sobre el caso (creación, alerta, reporte, cambio de estado, documento) queda registrada en `historial_acciones` con operador, timestamp y detalle. |
+
+### 11.3 Por qué el diseño técnico es el correcto
+
+**MongoDB con embedding es la decisión más importante del sistema.** El patrón de acceso dominante en una emergencia es "dame todo lo que sé del caso AS-2026-001 ahora mismo". Con embedding, eso es una lectura O(1) de un único documento. Con colecciones separadas y referencias, serían entre 4 y 8 operaciones de lookup encadenadas — inaceptable en un sistema donde el tiempo es literalmente crítico.
+
+**Redis no es un adorno.** El dashboard es la pantalla que tiene abierta el coordinador de guardia. Si MongoDB recibe 50 operadores mirando el dashboard cada 30 segundos, son 150 aggregations por minuto sobre una colección que puede tener miles de casos. Redis los absorbe todos y devuelve la respuesta en 4ms. La invalidación reactiva — no por TTL sino por escritura — garantiza que esos 4ms devuelvan datos reales, no datos viejos.
+
+**Los índices 2dsphere habilitan búsquedas geoespaciales que en un sistema relacional requerirían una extensión PostGIS y una consulta compleja.** En FINDRA, buscar todos los casos activos en un radio de 5km de una coordenada es una query nativa de MongoDB sobre el campo `menor.ultima_ubicacion`.
+
+**El endpoint de ingesta unificado reduce la fricción de integración a cero.** Cada organismo solo necesita conocer tres campos: `organismo`, `tipoFuente` y `payload`. El sistema resuelve internamente qué hacer con eso — crear un caso nuevo, agregar una alerta, actualizar la autoridad judicial o registrar un reporte ciudadano. Agregar un octavo organismo en el futuro no requiere cambiar el contrato.
+
+### 11.4 Lo que nos gusta del sistema
+
+Lo que más nos satisface de FINDRA es que las decisiones técnicas no son arbitrarias — cada una resuelve un problema concreto del dominio:
+
+- El embedding resuelve la latencia de lectura en emergencia
+- Redis resuelve la carga sobre el dashboard de guardia
+- El endpoint unificado resuelve la fragmentación interorganismos
+- GridFS resuelve el almacenamiento de evidencia sin infraestructura externa
+- El enum `OrganismoFuente` resuelve la validación de origen en todo el sistema con una sola fuente de verdad
+- El historial de acciones resuelve la trazabilidad de auditoría que hoy no existe en el protocolo real
+
+La coherencia entre el modelo de datos, los índices, los servicios y el frontend es otro punto fuerte: lo que se documenta en el JSON schema del informe es exactamente lo que persiste en MongoDB y lo que devuelve la API al frontend. No hay divergencias.
+
+### 11.5 Limitaciones honestas y cómo se resuelven en producción
+
+FINDRA es un prototipo académico con alcance deliberadamente acotado. Estas son las limitaciones y su path de resolución:
+
+| Limitación actual | Impacto | Resolución en producción |
+|---|---|---|
+| Autenticación simulada (`OP_FINDRA`) | Cualquier operador puede realizar cualquier acción | Integrar Spring Security + JWT o OAuth2. El modelo `Usuario` ya existe; no hay cambios de esquema. |
+| Instancia MongoDB única | Sin failover si el nodo cae | Activar el Replica Set rs0 de 3 nodos vía `MONGODB_URI`. Cero cambios en el código. |
+| Operador hardcodeado en historial | Auditoría no identifica al usuario real | Extraído del token JWT al autenticar. |
+| Canales de alerta simulados | SMS, cadena nacional y app no se activan | Integrar APIs de SIFEBU y medios. El modelo de datos no cambia — solo se agrega lógica en `emitirAlertas()`. |
+| Sin paginación en alertas/reportes | Límite de 100 registros en resúmenes | Agregar cursor-based pagination. Los índices ya están creados. |
+
+---
+
+## 10. Guía Funcional de la Aplicación
+
+Esta sección documenta el recorrido completo por las funcionalidades de FINDRA, con sus flujos de interacción y los datos que persisten en MongoDB en cada paso.
+
+### 10.1 Mapa de navegación
+
+```mermaid
+graph TD
+    A[🏠 Dashboard / Inicio] --> B[📋 Casos]
+    A --> C[🔔 Alertas]
+    A --> D[📝 Reportes]
+    A --> E[🗺 Mapa]
+    A --> F[👤 Usuarios]
+    B --> G[Nuevo Caso]
+    B --> H[Búsqueda con filtros]
+    H --> I[Detalle de Caso]
+    I --> J[Emitir Alerta Sofía]
+    I --> K[Subir Documento]
+    I --> L[Reporte Rápido]
+    I --> M[Cerrar / Archivar]
+    C --> I
+    D --> I
+    E --> I
+```
+
+### 10.2 Flujo A — Registro de un caso nuevo
+
+El operador de una fuerza federal (PFA, Gendarmería, Prefectura o PSA) abre la aplicación e ingresa los datos del caso desde el formulario de alta.
+
+```mermaid
+sequenceDiagram
+    actor Op as Operador
+    participant UI as React (frontend)
+    participant API as Spring Boot
+    participant Mongo as MongoDB
+    participant Redis as Redis
+
+    Op->>UI: Clic "Nuevo caso" en Dashboard
+    UI->>UI: Renderiza formulario NewCaseView
+    Op->>UI: Completa datos del menor, denunciante,<br/>autoridad judicial, adjuntos
+
+    UI->>API: POST /api/casos
+    API->>Mongo: count(caso_id ~ "^AS-2026-") + 1
+    Mongo-->>API: siguiente = N
+    API->>Mongo: save(Caso) con caso_id="AS-2026-00N"<br/>fotoUrl="/media/AS-2026-00N/foto_principal.jpg"<br/>historialAcciones=[{caso_creado, OP_FINDRA}]
+    Mongo-->>API: Caso persistido
+    API->>Redis: @CacheEvict("dashboard-resumen")
+    API-->>UI: 201 Created · {casoId, estado, ...}
+    UI->>UI: setView("detail") con el caso recién creado
+```
+
+**Datos persistidos en MongoDB:**
+
+```json
+{
+  "caso_id": "AS-2026-001",
+  "estado": "ACTIVO",
+  "fecha_activacion": "2026-04-15T10:30:00Z",
+  "menor": { "nombre": "...", "edad": 8, "peso": "28 kg", "foto_url": "/media/AS-2026-001/foto_principal.jpg" },
+  "historial_acciones": [{ "accion": "caso_creado", "operador": "OP_FINDRA" }]
+}
+```
+
+### 10.3 Flujo B — Emisión de Alerta Sofía
+
+Desde el detalle del caso, el operador activa la alerta interinstitucional por los canales disponibles.
+
+```mermaid
+sequenceDiagram
+    actor Op as Operador
+    participant UI as React
+    participant API as Spring Boot
+    participant Mongo as MongoDB
+    participant Redis as Redis
+
+    Op->>UI: Clic "Emitir Alerta Sofía" (solo si estado=ACTIVO)
+    UI->>UI: Abre AlertModal
+    Op->>UI: Selecciona canales + observaciones<br/>+ check "Requiere autorización fiscal"
+
+    UI->>API: POST /api/casos/{id}/alertas<br/>{canales, observaciones, requiereAutorizacion}
+    API->>Mongo: $push alertasEmitidas × N canales<br/>estado = REQUIERE_AUTORIZACION | ENVIADA
+    API->>Mongo: $push historialAcciones {alerta_emitida}
+    Mongo-->>API: Caso actualizado
+    API->>Redis: @CacheEvict("dashboard-resumen")
+    API-->>UI: 200 OK · Caso completo actualizado
+    UI->>UI: Cierra modal · refresca detalle
+```
+
+**Canales disponibles:**
+| Canal | Descripción |
+|---|---|
+| SMS masivo | Difusión a abonados en la zona |
+| Redes sociales | Facebook, Instagram, X |
+| Cadena nacional TV + Radio | Interrupción de programación |
+| Aplicación ciudadana FINDRA | Push notification en app móvil |
+
+**Estado de la alerta:**
+- `ENVIADA` — el operador confirmó sin requerir autorización adicional
+- `REQUIERE_AUTORIZACION` — pendiente de aprobación del fiscal a cargo (registrado en `observaciones`)
+
+### 10.4 Flujo C — Ingesta multi-organismo vía API
+
+Los 7 organismos del protocolo pueden enriquecer el mismo caso de forma incremental mediante el endpoint de ingesta unificado. Este flujo es exclusivamente de API (sin UI).
+
+```mermaid
+sequenceDiagram
+    participant Org as Organismo externo<br/>(SIFEBU / PROTEX / Missing Children)
+    participant API as POST /api/ingesta/organismo
+    participant Mapper as IngestaMapper
+    participant Mongo as MongoDB
+
+    Org->>API: {organismo, tipoFuente, payload}
+    API->>API: Valida organismo vs OrganismoFuente enum
+    API->>Mapper: map(tipoFuente, payload)
+
+    alt tipoFuente = denuncia_formal
+        Mapper->>Mongo: save(nuevo Caso)
+    else tipoFuente = notificacion_alerta
+        Mapper->>Mongo: $push alertasEmitidas
+    else tipoFuente = notificacion_judicial
+        Mapper->>Mongo: update autoridadJudicial + $push documentosAdjuntos
+    else tipoFuente = reporte_avistamiento
+        Mapper->>Mongo: $push reportesCiudadanos
+    end
+
+    Mongo-->>API: Caso enriquecido
+    API-->>Org: 200 OK / 201 Created
+```
+
+### 10.5 Flujo D — Dashboard con caché Redis
+
+El dashboard es la vista de mayor tráfico del sistema. La capa Redis garantiza respuestas sub-10ms para el 95% de los accesos.
+
+```mermaid
+sequenceDiagram
+    actor Op as Operador
+    participant UI as React Dashboard
+    participant API as Spring Boot
+    participant Redis as Redis (TTL 30s)
+    participant Mongo as MongoDB
+
+    Op->>UI: Abre Dashboard / refresca
+    UI->>API: GET /api/dashboard/resumen
+    API->>Redis: GET "dashboard-resumen"
+
+    alt Cache HIT (~4ms)
+        Redis-->>API: {casosActivos, alertasHoy, ...}
+        API-->>UI: 200 OK (< 5ms)
+    else Cache MISS (~80ms)
+        Redis-->>API: null
+        API->>Mongo: 4× aggregation pipeline
+        Mongo-->>API: métricas
+        API->>Redis: SET "dashboard-resumen" TTL=30s
+        API-->>UI: 200 OK (~80ms)
+    end
+
+    Note over API,Redis: Cualquier escritura (crear caso,<br/>emitir alerta, cambiar estado)<br/>dispara @CacheEvict inmediato
+```
+
+### 10.6 Flujo E — Cierre o archivo de caso
+
+```mermaid
+stateDiagram-v2
+    [*] --> ACTIVO : caso_creado
+    ACTIVO --> ACTIVO : alerta_emitida\nreporte_ciudadano_registrado\ndocumento_adjuntado
+    ACTIVO --> RESUELTO : Operador "Cerrar caso"\nfecha_cierre = Instant.now()
+    ACTIVO --> ARCHIVADO : Operador "Archivar"\nfecha_cierre = Instant.now()
+    RESUELTO --> [*]
+    ARCHIVADO --> [*]
+```
+
+Cuando el operador cierra o archiva el caso:
+1. `PATCH /api/casos/{id}/estado` con `{estado: "RESUELTO"|"ARCHIVADO", resultado: "..."}`
+2. `CasoService` asigna `fechaCierre = Instant.now()` y registra `estado_actualizado` en el historial
+3. `@CacheEvict` invalida el resumen del dashboard en Redis
+4. Los botones "Emitir Alerta Sofía" quedan deshabilitados (validación `caso.estado !== "ACTIVO"`)
+
+### 10.7 Flujo F — Subida y descarga de documentos (GridFS)
+
+```mermaid
+sequenceDiagram
+    actor Op as Operador
+    participant UI as CaseDetail
+    participant API as Spring Boot
+    participant GFS as GridFS (fs.chunks)
+    participant Mongo as MongoDB (casos)
+
+    Op->>UI: Selecciona archivo + tipo → "+ Adjuntar"
+    UI->>API: POST /api/casos/{id}/documentos<br/>multipart/form-data {file, tipo, operador}
+    API->>GFS: gridFsTemplate.store(inputStream, filename, contentType)
+    GFS-->>API: ObjectId (gridFsId)
+    API->>Mongo: $push documentosAdjuntos<br/>{tipo, url: filename, grid_fs_id, organismo, timestamp}
+    Mongo-->>API: Caso actualizado
+    API-->>UI: 200 OK
+
+    Op->>UI: Clic en nombre del documento
+    UI->>API: GET /api/casos/{id}/documentos/{gridFsId}
+    API->>GFS: gridFsTemplate.findOne + getResource
+    GFS-->>API: GridFsResource (stream)
+    API-->>UI: 200 OK + Content-Disposition: inline; filename*=UTF-8''...
+    UI->>UI: Abre archivo en nueva pestaña
+```
+
+### 10.8 Recorrido completo por la UI
+
+| Vista | Acceso | Funciones disponibles | Endpoints consumidos |
+|---|---|---|---|
+| **Dashboard** | Inicio (default) | Ver métricas, tabla de casos activos, mapa nacional con pins | `GET /api/dashboard/resumen`, `GET /api/casos?estado=ACTIVO` |
+| **Nuevo Caso** | Botón en Dashboard | Registrar caso con datos del menor (incl. peso), denunciante, autoridad judicial y adjuntos | `POST /api/casos`, `POST /api/casos/{id}/documentos` |
+| **Búsqueda / Casos** | Nav "Casos" | Filtrar por texto, estado, zona, edad mín/máx; abrir detalle | `GET /api/casos?texto=&estado=&zona=&edadMin=&edadMax=` |
+| **Detalle de Caso** | Click en cualquier caso | Ver ficha completa, emitir alerta, reporte rápido, subir/descargar documentos, cerrar/archivar, historial de acciones | `GET /api/casos/{id}`, `POST /api/casos/{id}/alertas`, `POST /api/casos/{id}/reportes`, `PATCH /api/casos/{id}/estado`, `POST/GET /api/casos/{id}/documentos` |
+| **Alertas** | Nav "Alertas" | Lista de casos con alertas emitidas, detalle por canal y estado | `GET /api/alertas` |
+| **Reportes** | Nav "Reportes" | Lista de reportes ciudadanos por caso, estado (RECIBIDO/VERIFICADO/DESCARTADO) | `GET /api/reportes` |
+| **Mapa** | Nav "Mapa" | Vista cartográfica interactiva con OpenStreetMap, sidebar de casos activos, popup con acceso al detalle | `GET /api/casos?estado=ACTIVO` |
+| **Usuarios** | Nav "Usuarios" | Listar operadores registrados, dar de alta nuevo usuario con rol y organismo | `GET /api/usuarios`, `POST /api/usuarios` |
 
 ---
 

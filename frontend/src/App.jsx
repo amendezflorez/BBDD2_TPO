@@ -651,6 +651,8 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport,
             <dd>{caso.menor.ojos}</dd>
             <dt>Estatura</dt>
             <dd>{caso.menor.estatura}</dd>
+            <dt>Peso</dt>
+            <dd>{caso.menor.peso}</dd>
             <dt>Ropa</dt>
             <dd>{caso.menor.ropa}</dd>
             <dt>Señas</dt>
@@ -680,7 +682,7 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport,
             {list(caso.alertasEmitidas).map((alerta, index) => (
               <div key={`${alerta.canal}-${index}`}>
                 <span>{alerta.canal}</span>
-                <span>{alerta.operador}</span>
+                <span>{alerta.plataforma ?? alerta.operador}</span>
                 <span>{formatDate(alerta.timestamp)}</span>
                 <strong>{alerta.estado}</strong>
               </div>
@@ -735,7 +737,7 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport,
               <div className="timeline-item" key={`${accion.accion}-${index}`}>
                 <time>{formatTime(accion.timestamp)}</time>
                 <div>
-                  <strong>{accion.usuario}</strong>
+                  <strong>{accion.operador}</strong>
                   <span>{accion.detalle}</span>
                 </div>
               </div>
@@ -765,6 +767,7 @@ function NewCaseView({ onBack, onSubmit }) {
     menorCabello: "",
     menorOjos: "",
     menorEstatura: "",
+    menorPeso: "",
     menorRopa: "",
     menorSenas: "",
     menorLat: "-34.6037",
@@ -792,6 +795,7 @@ function NewCaseView({ onBack, onSubmit }) {
         cabello: form.menorCabello,
         ojos: form.menorOjos,
         estatura: form.menorEstatura,
+        peso: form.menorPeso,
         ropa: form.menorRopa,
         senas: form.menorSenas,
         ultimaUbicacion: {
@@ -849,6 +853,7 @@ function NewCaseView({ onBack, onSubmit }) {
             <label>Cabello<input value={form.menorCabello} onChange={(e) => set("menorCabello", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} placeholder="Ej: castaño oscuro" /></label>
             <label>Ojos<input value={form.menorOjos} onChange={(e) => set("menorOjos", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} placeholder="Ej: marrones" /></label>
             <label>Estatura (m)<input type="number" step="0.01" min="0.30" max="2.10" placeholder="Ej: 1.52" value={form.menorEstatura} onChange={(e) => set("menorEstatura", e.target.value)} /></label>
+            <label>Peso (kg)<input type="number" step="0.1" min="1" max="150" placeholder="Ej: 28" value={form.menorPeso} onChange={(e) => set("menorPeso", e.target.value)} /></label>
             <label>Ropa<input value={form.menorRopa} onChange={(e) => set("menorRopa", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ ,.-]/g, ""))} placeholder="Ej: camisa azul, jeans" /></label>
             <label>Señas particulares<input value={form.menorSenas} onChange={(e) => set("menorSenas", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ ,.-]/g, ""))} placeholder="Ej: lunar en mejilla izquierda" /></label>
             <label>Zona / última ubicación *<input required value={form.zona} onChange={(e) => set("zona", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ ,.-]/g, ""))} placeholder="Ej: CABA" /></label>
