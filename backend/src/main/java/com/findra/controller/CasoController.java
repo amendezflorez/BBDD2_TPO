@@ -7,8 +7,14 @@ import com.findra.model.Caso;
 import com.findra.model.EstadoCaso;
 import com.findra.service.CasoService;
 import jakarta.validation.Valid;
+import java.io.IOException;
 import java.util.List;
+import org.springframework.core.io.Resource;
+import org.springframework.data.mongodb.gridfs.GridFsResource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -18,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/casos")
@@ -71,5 +78,30 @@ public class CasoController {
             @PathVariable String casoId,
             @Valid @RequestBody ReporteRequest request) {
         return casoService.registrarReporte(casoId, request);
+    }
+
+    @PostMapping("/{casoId}/documentos")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Caso subirDocumento(
+            @PathVariable String casoId,
+            @RequestParam("file") MultipartFile file,
+            @RequestParam(value = "tipo", defaultValue = "Documento") String tipo,
+            @RequestParam(value = "operador", required = false) String operador) throws IOException {
+        return casoService.subirDocumento(casoId, file, tipo, operador);
+    }
+
+    @GetMapping("/{casoId}/documentos/{gridFsId}")
+    public ResponseEntity<Resource> descargarDocumento(
+            @PathVariable String casoId,
+            @PathVariable String gridFsId) throws IOException {
+        GridFsResource resource = casoService.descargarDocumento(gridFsId);
+        String contentType = resource.getContentType();
+        MediaType mediaType = (contentType != null)
+                ? MediaType.parseMediaType(contentType)
+                : MediaType.APPLICATION_OCTET_STREAM;
+        return ResponseEntity.ok()
+                .contentType(mediaType)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
+                .body(resource);
     }
 }

@@ -342,6 +342,13 @@ h2 {
 
 .map-panel {
   min-height: 390px;
+  display: flex;
+  flex-direction: column;
+}
+
+.map-panel .map-grow {
+  flex: 1;
+  min-height: 0;
 }
 
 .map-detail {
@@ -578,6 +585,7 @@ h2 {
 .modal-backdrop {
   position: fixed;
   inset: 0;
+  z-index: 1000;
   display: grid;
   place-items: center;
   padding: 20px;

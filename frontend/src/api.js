@@ -1,9 +1,10 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8080/api";
 
 async function request(path, options = {}) {
+  const isFormData = options.body instanceof FormData;
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: {
-      "Content-Type": "application/json",
+      ...(isFormData ? {} : { "Content-Type": "application/json" }),
       ...(options.headers ?? {}),
     },
     ...options,
@@ -11,7 +12,7 @@ async function request(path, options = {}) {
 
   if (!response.ok) {
     const detail = await response.json().catch(() => ({ message: "Error inesperado" }));
-    throw new Error(detail.message ?? "No se pudo completar la operacion");
+    throw new Error(detail.message ?? "No se pudo completar la operación");
   }
 
   return response.json();
@@ -81,4 +82,19 @@ export function actualizarEstado(casoId, estado, resultado = null) {
     method: "PATCH",
     body: JSON.stringify({ estado, resultado, operador: "OP_FINDRA" }),
   });
+}
+
+export function subirDocumento(casoId, file, tipo) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("tipo", tipo);
+  formData.append("operador", "OP_FINDRA");
+  return request(`/casos/${casoId}/documentos`, {
+    method: "POST",
+    body: formData,
+  });
+}
+
+export function urlDocumento(casoId, gridFsId) {
+  return `${API_BASE_URL}/casos/${casoId}/documentos/${gridFsId}`;
 }

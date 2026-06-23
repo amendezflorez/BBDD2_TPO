@@ -27,6 +27,8 @@ import {
   fetchReportes,
   fetchUsuarios,
   registrarReporte,
+  subirDocumento,
+  urlDocumento,
 } from "./api.js";
 
 const emptyFilters = {
@@ -36,6 +38,42 @@ const emptyFilters = {
   edadMin: "0",
   edadMax: "18",
 };
+
+const TIPOS_DOCUMENTO = ["Foto", "DNI", "Acta", "Informe", "Otro"];
+
+function detectarTipo(file) {
+  if (file.type.startsWith("image/")) return "Foto";
+  if (file.type === "application/pdf") return "Informe";
+  if (file.type.includes("word") || file.type.includes("document")) return "Acta";
+  return "Otro";
+}
+
+const PROVINCIAS = [
+  "Buenos Aires",
+  "Catamarca",
+  "Chaco",
+  "Chubut",
+  "Ciudad Autónoma de Buenos Aires",
+  "Córdoba",
+  "Corrientes",
+  "Entre Ríos",
+  "Formosa",
+  "Jujuy",
+  "La Pampa",
+  "La Rioja",
+  "Mendoza",
+  "Misiones",
+  "Neuquén",
+  "Río Negro",
+  "Salta",
+  "San Juan",
+  "San Luis",
+  "Santa Cruz",
+  "Santa Fe",
+  "Santiago del Estero",
+  "Tierra del Fuego",
+  "Tucumán",
+];
 
 const navItems = [
   ["Inicio", Home],
@@ -178,13 +216,33 @@ export function App() {
     setModalOpen(false);
   }
 
-  async function handleCrearCaso(payload) {
+  async function handleCrearCaso(payload, adjuntos = []) {
     try {
       const created = await crearCaso(payload);
-      setSelectedCaso(created);
       setSelectedCasoId(created.casoId);
       setView("detail");
+
+      let current = created;
+      for (const { file, tipo } of adjuntos) {
+        try {
+          current = await subirDocumento(created.casoId, file, tipo);
+        } catch (e) {
+          setError(`Error subiendo ${file.name}: ${e.message}`);
+        }
+      }
+      setSelectedCaso(current);
+
       await Promise.all([refreshDashboard(), refreshCasos()]);
+    } catch (exception) {
+      setError(exception.message);
+    }
+  }
+
+  async function handleSubirDocumento(file, tipo) {
+    if (!selectedCaso) return;
+    try {
+      const updated = await subirDocumento(selectedCaso.casoId, file, tipo);
+      setSelectedCaso(updated);
     } catch (exception) {
       setError(exception.message);
     }
@@ -195,6 +253,7 @@ export function App() {
     try {
       const updated = await actualizarEstado(selectedCaso.casoId, estado);
       setSelectedCaso(updated);
+      setCasos((prev) => prev.map((c) => c.casoId === updated.casoId ? updated : c));
       await Promise.all([refreshDashboard(), refreshCasos()]);
     } catch (exception) {
       setError(exception.message);
@@ -211,7 +270,7 @@ export function App() {
       longitude: coordinates[0] + 0.004,
       latitude: coordinates[1] - 0.003,
       descripcion: "Reporte ciudadano cargado desde panel FINDRA",
-      contacto: "linea 134",
+      contacto: "línea 134",
       operador: "OP_FINDRA",
     });
     setSelectedCaso(updated);
@@ -229,7 +288,7 @@ export function App() {
           <Shield size={30} aria-hidden="true" />
           <div>
             <strong>FINDRA</strong>
-            <span>Alerta Sofia · SIFEBU</span>
+            <span>Alerta Sofía · SIFEBU</span>
           </div>
         </div>
 
@@ -332,6 +391,7 @@ export function App() {
                 onCambiarEstado={handleCambiarEstado}
                 onEmitAlert={() => setModalOpen(true)}
                 onQuickReport={handleQuickReport}
+                onSubirDocumento={handleSubirDocumento}
               />
             : <div className="loading-detail">Cargando caso...</div>
         )}
@@ -402,11 +462,11 @@ function Dashboard({ activeCases, cases, dashboard, loading, onCreateCase, onOpe
         <Metric
           label="Alertas emitidas hoy"
           value={dashboard?.alertasEmitidasHoy ?? "-"}
-          note="Ultima: hace 34 min"
+          note="Última: hace 34 min"
         />
         <Metric label="Casos resueltos" value={dashboard?.casosResueltosMes ?? "-"} note="Este mes" />
         <Metric
-          label="Tiempo prom. activacion"
+          label="Tiempo prom. activación"
           value={`${dashboard?.tiempoPromedioActivacionMinutos ?? 18} min`}
           note="4 min menos vs. semana ant."
         />
@@ -457,12 +517,16 @@ function SearchView({
         </label>
 
         <label>
-          Zona geografica
-          <input
+          Zona geográfica
+          <select
             value={filters.zona}
             onChange={(event) => onChangeFilters({ ...filters, zona: event.target.value })}
-            placeholder="Provincia o localidad"
-          />
+          >
+            <option value="">Todas</option>
+            {PROVINCIAS.map((p) => (
+              <option key={p} value={p}>{p}</option>
+            ))}
+          </select>
         </label>
 
         <div className="filter-row">
@@ -473,7 +537,11 @@ function SearchView({
               max="18"
               type="number"
               value={filters.edadMin}
-              onChange={(event) => onChangeFilters({ ...filters, edadMin: event.target.value })}
+              onChange={(event) => {
+                const v = Math.min(18, Math.max(0, Number(event.target.value)));
+                onChangeFilters({ ...filters, edadMin: String(v) });
+              }}
+              onKeyDown={(event) => ["-", "+", "e", "E", "."].includes(event.key) && event.preventDefault()}
             />
           </label>
           <label>
@@ -483,7 +551,11 @@ function SearchView({
               max="18"
               type="number"
               value={filters.edadMax}
-              onChange={(event) => onChangeFilters({ ...filters, edadMax: event.target.value })}
+              onChange={(event) => {
+                const v = Math.min(18, Math.max(0, Number(event.target.value)));
+                onChangeFilters({ ...filters, edadMax: String(v) });
+              }}
+              onKeyDown={(event) => ["-", "+", "e", "E", "."].includes(event.key) && event.preventDefault()}
             />
           </label>
         </div>
@@ -511,7 +583,7 @@ function SearchView({
               <div>
                 <strong>{caso.menor.nombre}</strong>
                 <span>
-                  {caso.casoId} · {caso.menor.edad} anos · {caso.zona}
+                  {caso.casoId} · {caso.menor.edad} años · {caso.zona}
                 </span>
               </div>
               <ElapsedClock date={caso.fechaActivacion} />
@@ -525,7 +597,25 @@ function SearchView({
   );
 }
 
-function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport }) {
+function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport, onSubirDocumento }) {
+  const [adjuntoTipo, setAdjuntoTipo] = useState("Foto");
+  const [confirmAccion, setConfirmAccion] = useState(null); // { estado, label }
+
+  function handleFileChange(event) {
+    const file = event.target.files[0];
+    if (file) onSubirDocumento(file, adjuntoTipo !== "Foto" ? adjuntoTipo : detectarTipo(file));
+    event.target.value = "";
+  }
+
+  function pedirConfirmacion(estado, label) {
+    setConfirmAccion({ estado, label });
+  }
+
+  function confirmar() {
+    onCambiarEstado(confirmAccion.estado);
+    setConfirmAccion(null);
+  }
+
   return (
     <section className="detail-view">
       <div className="detail-header">
@@ -538,12 +628,12 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport 
         </div>
         <ElapsedClock date={caso.fechaActivacion} large />
         {caso.estado === "ACTIVO" && (
-          <button className="ghost-button" type="button" onClick={() => onCambiarEstado("RESUELTO")}>
+          <button className="ghost-button" type="button" onClick={() => pedirConfirmacion("RESUELTO", "Cerrar caso")}>
             Cerrar caso
           </button>
         )}
         {caso.estado === "ACTIVO" && (
-          <button className="ghost-button" type="button" onClick={() => onCambiarEstado("ARCHIVADO")}>
+          <button className="ghost-button" type="button" onClick={() => pedirConfirmacion("ARCHIVADO", "Archivar")}>
             Archivar
           </button>
         )}
@@ -553,7 +643,7 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport 
         <div className="identity-panel">
           <Avatar name={caso.menor.nombre} large />
           <h2>{caso.menor.nombre}</h2>
-          <p>{caso.menor.edad} anos · {caso.menor.sexo === "F" ? "Femenino" : "Masculino"}</p>
+          <p>{caso.menor.edad} años · {caso.menor.sexo === "F" ? "Femenino" : "Masculino"}</p>
           <dl>
             <dt>Cabello</dt>
             <dd>{caso.menor.cabello}</dd>
@@ -563,7 +653,7 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport 
             <dd>{caso.menor.estatura}</dd>
             <dt>Ropa</dt>
             <dd>{caso.menor.ropa}</dd>
-            <dt>Senas</dt>
+            <dt>Señas</dt>
             <dd>{caso.menor.senas}</dd>
           </dl>
         </div>
@@ -583,7 +673,7 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport 
             <h2>Gestor de alertas</h2>
             <button className="primary-button" type="button" onClick={onEmitAlert} disabled={caso.estado !== "ACTIVO"}>
               <Bell size={17} aria-hidden="true" />
-              Emitir Alerta Sofia
+              Emitir Alerta Sofía
             </button>
           </div>
           <div className="mini-table">
@@ -600,17 +690,42 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport 
         </div>
 
         <div className="panel attachments">
-          <h2>Adjuntos / Evidencia</h2>
-          {list(caso.documentosAdjuntos).map((doc) => (
-            <span key={doc.url}>{doc.tipo} {doc.url}</span>
+          <div className="panel-title">
+            <h2>Adjuntos / Evidencia</h2>
+            {caso.estado === "ACTIVO" && (
+              <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                <select value={adjuntoTipo} onChange={(e) => setAdjuntoTipo(e.target.value)}>
+                  {TIPOS_DOCUMENTO.map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+                <label className="ghost-button" style={{ cursor: "pointer", marginBottom: 0 }}>
+                  + Adjuntar
+                  <input type="file" style={{ display: "none" }} accept="image/*,.pdf,.doc,.docx" onChange={handleFileChange} />
+                </label>
+              </div>
+            )}
+          </div>
+          {list(caso.documentosAdjuntos).length === 0 && (
+            <p style={{ color: "#64717a", fontSize: "0.85rem" }}>Sin adjuntos.</p>
+          )}
+          {list(caso.documentosAdjuntos).map((doc, i) => (
+            <a
+              key={i}
+              href={urlDocumento(caso.casoId, doc.gridFsId)}
+              target="_blank"
+              rel="noreferrer"
+              style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "0.85rem", color: "inherit", textDecoration: "none", padding: "4px 0", borderBottom: "1px solid var(--border)" }}
+            >
+              <FileText size={14} aria-hidden="true" />
+              <span><strong>{doc.tipo}</strong> · {doc.url}</span>
+            </a>
           ))}
         </div>
 
         <div className="panel timeline">
           <div className="panel-title">
-            <h2>Linea de tiempo</h2>
+            <h2>Línea de tiempo</h2>
             <button className="ghost-button" type="button" onClick={onQuickReport}>
-              Reporte rapido
+              Reporte rápido
             </button>
           </div>
           {list(caso.historialAcciones)
@@ -627,12 +742,22 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport 
             ))}
         </div>
       </div>
+
+      {confirmAccion && (
+        <ConfirmModal
+          label={confirmAccion.label}
+          casoId={caso.casoId}
+          onConfirm={confirmar}
+          onClose={() => setConfirmAccion(null)}
+        />
+      )}
     </section>
   );
 }
 
 function NewCaseView({ onBack, onSubmit }) {
   const [submitting, setSubmitting] = useState(false);
+  const [adjuntos, setAdjuntos] = useState([]);
   const [form, setForm] = useState({
     menorNombre: "",
     menorEdad: "",
@@ -689,7 +814,7 @@ function NewCaseView({ onBack, onSubmit }) {
     };
     setSubmitting(true);
     try {
-      await onSubmit(payload);
+      await onSubmit(payload, adjuntos);
     } finally {
       setSubmitting(false);
     }
@@ -698,12 +823,14 @@ function NewCaseView({ onBack, onSubmit }) {
   return (
     <section className="detail-view">
       <div className="detail-header">
-        <button className="ghost-button" type="button" onClick={onBack}>
-          Volver
-        </button>
-        <div>
-          <span>Nuevo caso</span>
-          <h1>Registrar caso Alerta Sofía</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+          <button className="ghost-button" type="button" onClick={onBack}>
+            Volver
+          </button>
+          <div>
+            <span>Nuevo caso</span>
+            <h1>Registrar caso Alerta Sofía</h1>
+          </div>
         </div>
       </div>
 
@@ -712,7 +839,7 @@ function NewCaseView({ onBack, onSubmit }) {
           <h2>Datos del menor</h2>
           <div className="form-grid">
             <label>Nombre completo *<input required value={form.menorNombre} onChange={(e) => set("menorNombre", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ .-]/g, ""))} /></label>
-            <label>Edad *<input required type="number" min="0" max="18" value={form.menorEdad} onChange={(e) => set("menorEdad", e.target.value)} onKeyDown={(e) => ["e", "E", "+", "-", "."].includes(e.key) && e.preventDefault()} /></label>
+            <label>Edad *<input required type="number" min="0" max="18" value={form.menorEdad} onChange={(e) => set("menorEdad", String(Math.min(18, Math.max(0, Number(e.target.value)))))} onKeyDown={(e) => ["-", "+", "e", "E", "."].includes(e.key) && e.preventDefault()} /></label>
             <label>Sexo
               <select value={form.menorSexo} onChange={(e) => set("menorSexo", e.target.value)}>
                 <option value="F">Femenino</option>
@@ -748,6 +875,42 @@ function NewCaseView({ onBack, onSubmit }) {
           </div>
         </div>
 
+        <div className="panel">
+          <h2>Adjuntos / Evidencia</h2>
+          <div className="form-grid">
+            <label>
+              Agregar archivos
+              <input
+                type="file"
+                multiple
+                accept="image/*,.pdf,.doc,.docx"
+                onChange={(e) => {
+                  const nuevos = Array.from(e.target.files).map((f) => ({ file: f, tipo: detectarTipo(f) }));
+                  setAdjuntos((prev) => [...prev, ...nuevos]);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+          {adjuntos.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "12px" }}>
+              {adjuntos.map((a, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "0.85rem" }}>
+                  <FileText size={14} aria-hidden="true" />
+                  <span style={{ flex: 1 }}>{a.file.name}</span>
+                  <select
+                    value={a.tipo}
+                    onChange={(e) => setAdjuntos((prev) => prev.map((x, j) => j === i ? { ...x, tipo: e.target.value } : x))}
+                  >
+                    {TIPOS_DOCUMENTO.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  <button type="button" className="ghost-button" style={{ padding: "2px 8px" }} onClick={() => setAdjuntos((prev) => prev.filter((_, j) => j !== i))}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
         <div className="modal-actions">
           <button className="ghost-button" type="button" onClick={onBack}>Cancelar</button>
           <button className="primary-button" type="submit" disabled={submitting}>
@@ -761,7 +924,7 @@ function NewCaseView({ onBack, onSubmit }) {
 }
 
 function AlertModal({ caso, onClose, onSubmit }) {
-  const [channels, setChannels] = useState(["SMS masivo", "Redes sociales", "Aplicacion ciudadana FINDRA"]);
+  const [channels, setChannels] = useState(["SMS masivo", "Redes sociales", "Aplicación ciudadana FINDRA"]);
   const [observaciones, setObservaciones] = useState("");
   const [requiresAuthorization, setRequiresAuthorization] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -791,12 +954,12 @@ function AlertModal({ caso, onClose, onSubmit }) {
         <button className="icon-button close" type="button" onClick={onClose} title="Cerrar">
           <X size={20} aria-hidden="true" />
         </button>
-        <h2>Confirmar Alerta Sofia</h2>
+        <h2>Confirmar Alerta Sofía</h2>
         <p>{caso.casoId} · {caso.menor.nombre}</p>
 
         <fieldset>
           <legend>Canales a activar</legend>
-          {["SMS masivo", "Redes sociales", "Cadena nacional TV + Radio", "Aplicacion ciudadana FINDRA"].map(
+          {["SMS masivo", "Redes sociales", "Cadena nacional TV + Radio", "Aplicación ciudadana FINDRA"].map(
             (channel) => (
               <label className="check-line" key={channel}>
                 <input
@@ -825,7 +988,7 @@ function AlertModal({ caso, onClose, onSubmit }) {
             type="checkbox"
             onChange={(event) => setRequiresAuthorization(event.target.checked)}
           />
-          Requiere autorizacion del fiscal a cargo.
+          Requiere autorización del fiscal a cargo.
         </label>
 
         <div className="modal-actions">
@@ -835,6 +998,30 @@ function AlertModal({ caso, onClose, onSubmit }) {
           <button className="primary-button" type="button" disabled={submitting || channels.length === 0} onClick={submit}>
             <Bell size={17} aria-hidden="true" />
             Confirmar y emitir
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfirmModal({ label, casoId, onConfirm, onClose }) {
+  return (
+    <div className="modal-backdrop">
+      <div className="modal">
+        <button className="icon-button close" type="button" onClick={onClose} title="Cerrar">
+          <X size={20} aria-hidden="true" />
+        </button>
+        <h2>¿{label}?</h2>
+        <p style={{ color: "#64717a", margin: "8px 0 24px" }}>
+          Esta acción cambiará el estado del caso <strong>{casoId}</strong> y quedará registrada en el historial.
+        </p>
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>
+            Cancelar
+          </button>
+          <button className="primary-button" type="button" onClick={onConfirm}>
+            Confirmar
           </button>
         </div>
       </div>
@@ -860,7 +1047,7 @@ function CaseTable({ cases, onOpenCase }) {
               <small>{caso.casoId}</small>
             </span>
           </span>
-          <span>{caso.menor.edad} anos</span>
+          <span>{caso.menor.edad} años</span>
           <span>{caso.zona}</span>
           <ElapsedClock date={caso.fechaActivacion} />
         </button>
@@ -902,13 +1089,14 @@ function GeoPanel({ cases, detail = false }) {
   return (
     <div className={`panel map-panel ${detail ? "map-detail" : ""}`}>
       <div className="panel-title">
-        <h2>{detail ? "Ultima ubicacion conocida" : "Mapa de casos"}</h2>
-        <span>{detail ? "Ultima posicion registrada" : "Vista nacional"}</span>
+        <h2>{detail ? "Última ubicación conocida" : "Mapa de casos"}</h2>
+        <span>{detail ? "Última posición registrada" : "Vista nacional"}</span>
       </div>
+      <div className={detail ? undefined : "map-grow"}>
       <MapContainer
         center={center}
         zoom={zoom}
-        style={{ height: "286px", borderRadius: "8px" }}
+        style={{ height: detail ? "286px" : "100%", minHeight: detail ? undefined : "286px", borderRadius: "8px" }}
         scrollWheelZoom={false}
       >
         <TileLayer
@@ -932,6 +1120,7 @@ function GeoPanel({ cases, detail = false }) {
           );
         })}
       </MapContainer>
+      </div>
       <div className="legend">
         <span><i className="dot alert-dot" />Con alerta emitida</span>
         <span><i className="dot" />Sin alerta</span>

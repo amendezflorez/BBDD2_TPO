@@ -9,25 +9,32 @@ import com.findra.exception.NotFoundException;
 import com.findra.model.AccionHistorial;
 import com.findra.model.Alerta;
 import com.findra.model.Caso;
+import com.findra.model.DocumentoAdjunto;
 import com.findra.model.EstadoAlerta;
 import com.findra.model.EstadoCaso;
 import com.findra.model.EstadoReporte;
 import com.findra.model.ReporteCiudadano;
 import com.findra.model.Ubicacion;
 import com.findra.repository.CasoRepository;
+import com.mongodb.client.gridfs.model.GridFSFile;
+import java.io.IOException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import org.bson.types.ObjectId;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.data.mongodb.gridfs.GridFsResource;
+import org.springframework.data.mongodb.gridfs.GridFsTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class CasoService {
@@ -36,10 +43,12 @@ public class CasoService {
 
     private final CasoRepository casoRepository;
     private final MongoOperations mongoTemplate;
+    private final GridFsTemplate gridFsTemplate;
 
-    public CasoService(CasoRepository casoRepository, MongoOperations mongoTemplate) {
+    public CasoService(CasoRepository casoRepository, MongoOperations mongoTemplate, GridFsTemplate gridFsTemplate) {
         this.casoRepository = casoRepository;
         this.mongoTemplate = mongoTemplate;
+        this.gridFsTemplate = gridFsTemplate;
     }
 
     public List<Caso> buscar(
@@ -208,6 +217,36 @@ public class CasoService {
                 })
                 .sorted(Comparator.comparing(ReporteResumenDto::ultimoReporte).reversed())
                 .collect(Collectors.toList());
+    }
+
+    public Caso subirDocumento(String casoId, MultipartFile file, String tipo, String operador) throws IOException {
+        Caso caso = obtenerPorCasoId(casoId);
+        ObjectId gridFsId = gridFsTemplate.store(
+                file.getInputStream(),
+                file.getOriginalFilename(),
+                file.getContentType());
+        DocumentoAdjunto doc = new DocumentoAdjunto(
+                tipo,
+                file.getOriginalFilename(),
+                operador(operador),
+                Instant.now());
+        doc.setGridFsId(gridFsId.toString());
+        caso.getDocumentosAdjuntos().add(doc);
+        caso.getHistorialAcciones().add(new AccionHistorial(
+                "documento_adjuntado",
+                operador(operador),
+                Instant.now(),
+                tipo + ": " + file.getOriginalFilename()));
+        return casoRepository.save(caso);
+    }
+
+    public GridFsResource descargarDocumento(String gridFsId) {
+        GridFSFile file = gridFsTemplate.findOne(
+                Query.query(Criteria.where("_id").is(new ObjectId(gridFsId))));
+        if (file == null) {
+            throw new NotFoundException("Documento no encontrado: " + gridFsId);
+        }
+        return gridFsTemplate.getResource(file);
     }
 
     private String operador(String operador) {

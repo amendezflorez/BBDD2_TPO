@@ -6,7 +6,13 @@ import org.springframework.data.mongodb.core.mapping.Field;
 public class DocumentoAdjunto {
 
     private String tipo;
+
+    /** Nombre original del archivo. */
     private String url;
+
+    /** ID del objeto en GridFS. */
+    @Field("grid_fs_id")
+    private String gridFsId;
 
     @Field("subido_por")
     private String subidoPor;
@@ -37,6 +43,14 @@ public class DocumentoAdjunto {
 
     public void setUrl(String url) {
         this.url = url;
+    }
+
+    public String getGridFsId() {
+        return gridFsId;
+    }
+
+    public void setGridFsId(String gridFsId) {
+        this.gridFsId = gridFsId;
     }
 
     public String getSubidoPor() {
