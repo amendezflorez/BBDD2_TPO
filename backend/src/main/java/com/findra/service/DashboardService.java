@@ -37,10 +37,7 @@ public class DashboardService {
 
     private long contarAlertasDesde(Instant desde) {
         Query query = new Query(Criteria.where("alertas_emitidas.timestamp").gte(desde));
-        return mongoTemplate.find(query, Caso.class).stream()
-                .flatMap(caso -> caso.getAlertasEmitidas().stream())
-                .filter(alerta -> alerta.getTimestamp() != null && !alerta.getTimestamp().isBefore(desde))
-                .count();
+        return mongoTemplate.count(query, Caso.class);
     }
 
     private Instant inicioDelDiaUtc() {
