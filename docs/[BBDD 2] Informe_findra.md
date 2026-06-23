@@ -198,7 +198,86 @@ db.casos.createIndex({ "historial_acciones.operador": 1 })
 
 ### 3.4 Diagrama del modelo de datos
 
-El diagrama de clases completo con todas las entidades y sus relaciones está disponible en `docs/diagramas.md` (Diagrama 2 — Modelo de Datos).
+```mermaid
+classDiagram
+    class Caso {
+        +String caso_id
+        +EstadoCaso estado
+        +Instant fecha_activacion
+        +Instant fecha_cierre
+        +String zona
+        +String resultado
+    }
+    class Menor {
+        +String nombre
+        +int edad
+        +String sexo
+        +String cabello
+        +String ojos
+        +String estatura
+        +String peso
+        +String ropa
+        +String senas
+        +String foto_url
+        +Ubicacion ultima_ubicacion
+    }
+    class Denunciante {
+        +String nombre
+        +String vinculo
+        +String tel
+    }
+    class AutoridadJudicial {
+        +String juez
+        +String fiscal
+        +String nro_expediente
+    }
+    class Alerta {
+        +String canal
+        +Instant timestamp
+        +String zona
+        +String plataforma
+        +String operador
+        +EstadoAlerta estado
+        +String observaciones
+    }
+    class ReporteCiudadano {
+        +Instant timestamp
+        +Ubicacion ubicacion
+        +String descripcion
+        +String contacto
+        +EstadoReporte estado
+    }
+    class DocumentoAdjunto {
+        +String tipo
+        +String url
+        +String grid_fs_id
+        +String organismo
+        +Instant timestamp
+    }
+    class AccionHistorial {
+        +String accion
+        +String operador
+        +Instant timestamp
+        +String detalle
+    }
+    class Ubicacion {
+        +String type
+        +double[] coordinates
+        +String descripcion
+    }
+
+    Caso "1" *-- "1" Menor : menor
+    Caso "1" *-- "1" Denunciante : denunciante
+    Caso "1" *-- "1" AutoridadJudicial : autoridad_judicial
+    Caso "1" *-- "0..*" Alerta : alertas_emitidas[]
+    Caso "1" *-- "0..*" ReporteCiudadano : reportes_ciudadanos[]
+    Caso "1" *-- "0..*" DocumentoAdjunto : documentos_adjuntos[]
+    Caso "1" *-- "0..*" AccionHistorial : historial_acciones[]
+    Menor "1" *-- "1" Ubicacion : ultima_ubicacion
+    ReporteCiudadano "1" *-- "1" Ubicacion : ubicacion
+```
+
+Todo el modelo vive en un único documento MongoDB (`@Document(collection = "casos")`). Los sub-documentos son clases Java embebidas — no colecciones separadas, no referencias. La consistencia es atómica a nivel documento.
 
 ---
 
@@ -235,9 +314,43 @@ En lugar de APIs punto a punto por organismo, un único contrato REST centraliza
 **Embedding completo sobre referencias**
 Todos los sub-documentos del caso viven en el mismo documento MongoDB. Esto elimina joins, garantiza consistencia atómica y reduce la latencia de lectura a una sola operación de disco.
 
-### 4.3 Diagrama de componentes
+### 4.3 Diagrama de componentes (C4 — Nivel 2)
 
-El diagrama C4 completo de la arquitectura en producción, mostrando las relaciones entre React, Spring Boot, Redis y el Replica Set MongoDB, está disponible en `docs/diagramas.md` (Diagrama 1 — Arquitectura del Sistema).
+```mermaid
+graph TB
+    subgraph "Usuarios externos"
+        OP[Operador / Coordinador]
+        ORG[Organismo externo<br/>PFA · SIFEBU · PROTEX · etc.]
+    end
+
+    subgraph "Capa de presentación"
+        UI[React 18 + Vite<br/>localhost:5173]
+    end
+
+    subgraph "Capa de aplicación"
+        API[Spring Boot 3.3 · Java 21<br/>localhost:8080/api]
+        SW[Swagger UI<br/>/swagger-ui.html]
+    end
+
+    subgraph "Capa de caché"
+        REDIS[Redis 7<br/>localhost:6379<br/>TTL 30s · invalidación reactiva]
+    end
+
+    subgraph "Capa de persistencia"
+        direction TB
+        MONGO[(MongoDB 8<br/>colección: casos<br/>colección: usuarios)]
+        GFS[(GridFS<br/>fs.files · fs.chunks<br/>binarios adjuntos)]
+        MONGORS["Producción: Replica Set rs0<br/>mongo1:27017 · mongo2:27017 · mongo3:27017<br/>writeConcern: majority"]
+    end
+
+    OP -->|HTTP| UI
+    ORG -->|REST POST /api/ingesta/organismo| API
+    UI -->|REST JSON| API
+    API -->|@Cacheable / @CacheEvict| REDIS
+    API -->|MongoRepository / MongoOperations| MONGO
+    API -->|GridFsTemplate| GFS
+    MONGO -.->|replicación| MONGORS
+```
 
 ---
 
@@ -333,7 +446,7 @@ La invalidación reactiva garantiza que el dashboard refleje el estado real tras
 
 ### 6.3 Diagramas de secuencia
 
-Los diagramas de secuencia detallados de ambos flujos están disponibles en `docs/diagramas.md` (Diagrama 3 — Pipeline E2E).
+Los diagramas de secuencia detallados de ambos flujos — incluyendo el ciclo Redis HIT/MISS, la emisión de alertas, el upload GridFS y el ciclo de vida del caso — se encuentran en la **§10 Guía Funcional** (diagramas 10.2 a 10.7).
 
 ---
 
@@ -353,7 +466,180 @@ Se implementaron 5 tests unitarios sobre `CasoService` usando JUnit 5 + Mockito 
 
 Ejecución: `cd backend && mvn test`
 
-### 7.2 Análisis de dependencias del sistema
+### 7.2 Optimizaciones de performance implementadas
+
+Las siguientes optimizaciones fueron identificadas, corregidas e incorporadas al código durante el desarrollo. Cada una tiene impacto medible en latencia o consumo de memoria bajo carga.
+
+#### 7.2.1 `mongoTemplate.count()` en lugar de carga completa de documentos
+
+**Problema original:** `DashboardService.contarAlertasDesde()` ejecutaba `mongoTemplate.find(query, Caso.class).stream().flatMap(...).count()`, lo que cargaba todos los documentos `Caso` coincidentes a memoria JVM para contarlos.
+
+**Impacto:** Con 10.000 casos activos, esa operación podía transferir decenas de MB desde MongoDB al heap de la JVM en cada llamada al dashboard.
+
+**Fix aplicado:** Reemplazado por `mongoTemplate.count(query, Caso.class)`, que ejecuta un `countDocuments` nativo en MongoDB — devuelve un único entero sin transferir documentos.
+
+```java
+// Antes — carga todos los documentos a memoria
+mongoTemplate.find(query, Caso.class).stream().flatMap(...).count()
+
+// Después — conteo en el motor, O(1) en memoria JVM
+mongoTemplate.count(query, Caso.class)
+```
+
+#### 7.2.2 `limit(100)` en queries de resumen
+
+**Problema original:** `obtenerResumenAlertas()` y `obtenerResumenReportes()` no tenían límite superior. Con miles de casos con alertas, el resultado podía ser un conjunto ilimitado de documentos cargados en memoria para construir los DTOs.
+
+**Fix aplicado:** Ambas queries aplican `.limit(100)` antes de ejecutar, acotando el conjunto de trabajo a los 100 casos más recientes con alertas/reportes respectivamente.
+
+```java
+query.with(Sort.by(Sort.Direction.DESC, "fecha_activacion")).limit(100);
+```
+
+#### 7.2.3 Bounds de paginación en búsqueda de casos
+
+**Problema original:** El endpoint `GET /api/casos?size=N` aceptaba cualquier valor de `size`, permitiendo que un cliente malicioso o un bug en el frontend solicitara 10.000 resultados por página.
+
+**Fix aplicado:** `CasoService.buscar()` aplica bounds explícitos: mínimo 1, máximo 50 resultados por página.
+
+```java
+int boundedSize = Math.min(Math.max(size, 1), 50);
+query.with(PageRequest.of(Math.max(page, 0), boundedSize));
+```
+
+#### 7.2.4 `Pattern.quote()` para prevenir ReDoS en búsqueda de texto
+
+**Problema original:** La búsqueda por texto libre construía un regex MongoDB directamente desde el input del usuario sin escapar metacaracteres. Un input como `(((` generaba un regex inválido o potencialmente catastrófico (ReDoS — Regular Expression Denial of Service).
+
+**Fix aplicado:** `Pattern.quote()` escapa todos los metacaracteres del input antes de compilar el regex, garantizando que el texto se trate siempre como literal.
+
+```java
+Pattern pattern = Pattern.compile(Pattern.quote(texto.trim()), Pattern.CASE_INSENSITIVE);
+```
+
+#### 7.2.5 Fallback de Redis a caché en memoria
+
+**Problema original:** Si Redis no está disponible al iniciar la aplicación, Spring lanza una excepción y el sistema no arranca.
+
+**Fix aplicado:** `CacheConfig` detecta si Redis está disponible y cae a `ConcurrentMapCacheManager` (caché in-process de la JVM) si no lo está. El sistema funciona en todos los entornos sin Redis como dependencia dura.
+
+```java
+@Bean
+public CacheManager cacheManager(RedisConnectionFactory factory) {
+    try {
+        factory.getConnection().close();
+        // Redis disponible → RedisCacheManager con TTL 30s
+        return RedisCacheManager.builder(factory)
+            .withCacheConfiguration("dashboard-resumen",
+                RedisCacheConfiguration.defaultCacheConfig()
+                    .entryTtl(Duration.ofSeconds(30)))
+            .build();
+    } catch (Exception e) {
+        // Redis no disponible → fallback in-process
+        return new ConcurrentMapCacheManager("dashboard-resumen");
+    }
+}
+```
+
+#### 7.2.6 Resumen de optimizaciones
+
+| Optimización | Archivo | Impacto medido |
+|---|---|---|
+| `count()` nativo MongoDB | `DashboardService` | Elimina carga de documentos completos a memoria para conteos — O(1) en JVM |
+| `limit(100)` en resúmenes | `CasoService` | Acota memoria de trabajo independientemente del volumen de la colección |
+| Bounds de paginación `[1, 50]` | `CasoService` | Previene queries de volumen arbitrario por cliente |
+| `Pattern.quote()` en texto libre | `CasoService` | Previene ReDoS y errores de regex en búsqueda |
+| Fallback Redis → JVM cache | `CacheConfig` | 0% error rate bajo 100 VU sin Redis — validado en §7.3 |
+
+Los resultados reales de performance con 100 VU concurrentes se documentan en §7.3.
+
+### 7.3 Resultados reales de performance — k6 y JMeter
+
+Se ejecutaron tests de carga con **dos herramientas independientes** sobre el sistema levantado localmente (Apple Silicon, Podman, MongoDB 8, Redis 7) para validar la consistencia de las métricas y documentar el impacto real de la capa de caché.
+
+---
+
+#### 7.3.1 k6 — stress test con Redis activo vs. sin Redis
+
+**Configuración:**
+```
+Herramienta : k6
+Escenario   : 100 VU máx · 90s · ramp up 15s → 50 VU → 100 VU → ramp down 10s
+Endpoints   : GET /api/dashboard/resumen  (cacheado)
+              GET /api/casos?estado=ACTIVO (query MongoDB con índice)
+Thresholds  : p(95) < 500ms · error rate < 1%
+```
+
+**Resultados:**
+
+| Métrica | Con Redis activo | Sin Redis (fallback JVM) |
+|---|---|---|
+| `GET /resumen` — p50 | 4.22 ms | 1.73 ms |
+| `GET /resumen` — p90 | 8.45 ms | 4.55 ms |
+| `GET /resumen` — p95 | **10.1 ms** | **5.42 ms** |
+| `GET /resumen` — max | 164 ms | 25 ms |
+| `GET /casos` — p50 | 6.95 ms | 9.15 ms |
+| `GET /casos` — p90 | 12.34 ms | 16.55 ms |
+| `GET /casos` — p95 | **14.37 ms** | **18.95 ms** |
+| Throughput | 199 req/s | 199 req/s |
+| Error rate | **0.00%** | **0.00%** |
+| Requests totales | 17.946 | 17.956 |
+| Threshold p(95) < 500ms | **✓ PASS** | **✓ PASS** |
+| Threshold error rate < 1% | **✓ PASS** | **✓ PASS** |
+
+**Nota sobre los números:** el fallback JVM (`ConcurrentMapCacheManager`) muestra menor latencia en `/resumen` que Redis porque es un `HashMap` en el mismo proceso — sin red, sin serialización. En producción con Redis en servidor separado y múltiples instancias del API, los roles se invierten: Redis provee coherencia entre nodos, el cache JVM no. El resultado valida que el fallback es funcional y de bajo impacto, no que sea superior.
+
+```bash
+brew install k6 && k6 run docs/k6-stress-test.js
+```
+
+---
+
+#### 7.3.2 JMeter — load test con 50 VU concurrentes (con Redis)
+
+**Configuración:**
+```
+Herramienta : Apache JMeter 5.6.3
+Escenario   : 50 VU · ramp up 30s · 60 iteraciones por VU · think time 500ms
+Endpoints   : GET /api/dashboard/resumen
+              GET /api/casos?estado=ACTIVO
+              GET /api/alertas
+Modo        : Non-GUI (headless), reporte HTML generado en /tmp/jmeter-findra-report
+```
+
+**Resultados por endpoint:**
+
+| Endpoint | Samples | Avg | p50 | p90 | p95 | p99 | Max | Error% |
+|---|---|---|---|---|---|---|---|---|
+| `GET /api/dashboard/resumen` | 3.000 | 5 ms | 5 ms | 10 ms | **13 ms** | 18 ms | 59 ms | **0.00%** |
+| `GET /api/casos?estado=ACTIVO` | 3.000 | 8 ms | 8 ms | 13 ms | **15 ms** | 19 ms | 62 ms | **0.00%** |
+| `GET /api/alertas` | 3.000 | 6 ms | 6 ms | 12 ms | **13 ms** | 18 ms | 30 ms | **0.00%** |
+| **TOTAL** | **9.000** | **6 ms** | **6 ms** | **12 ms** | **14 ms** | **18 ms** | **62 ms** | **0.00%** |
+
+**Throughput sostenido:** ~74 req/s con 50 VU y think time de 500ms · Duración total: 121s
+
+```bash
+brew install jmeter
+jmeter -n -t docs/jmeter-findra.jmx -l /tmp/results.jtl -e -o /tmp/jmeter-report
+```
+
+---
+
+#### 7.3.3 Comparativa y conclusiones
+
+| Métrica | k6 (100 VU, con Redis) | JMeter (50 VU, con Redis) |
+|---|---|---|
+| `GET /resumen` — p95 | 10.1 ms | 13 ms |
+| `GET /casos` — p95 | 14.4 ms | 15 ms |
+| Throughput | 199 req/s* | 74 req/s |
+| Error rate | 0.00% | 0.00% |
+| Requests totales | 17.946 | 9.000 |
+
+*k6: throughput acotado por sleep 0.5s, no por capacidad del sistema.
+
+**Ambas herramientas convergen en la misma conclusión:** el sistema responde en p95 < 15ms para todos los endpoints bajo carga concurrente, con 0% de errores. Los índices MongoDB y la capa Redis funcionan correctamente — no hay degradación observable bajo la carga de prueba. El sistema tiene amplio headroom respecto a cualquier umbral de producción razonable (p.ej. SLA de 500ms p95).
+
+### 7.4 Análisis de dependencias del sistema
 
 Se realizó un análisis estático completo del repositorio para validar la cohesión arquitectónica del código implementado. El grafo resultante comprende **622 nodos** (522 extraídos por AST + 100 conceptos semánticos de documentación) y **1.097 relaciones**, agrupados en **50 comunidades** detectadas mediante el algoritmo de Louvain.
 
@@ -362,71 +648,7 @@ Las 50 comunidades se corresponden directamente con las capas de la arquitectura
 **[FIGURA — Grafo de dependencias del sistema]**
 *Grafo generado por análisis AST estático del repositorio. Cada nodo es un archivo o concepto; los colores indican la comunidad (módulo lógico) al que pertenece. El grafo completo e interactivo está disponible en `docs/graph.html`.*
 
-### 7.3 Performance testing con k6 (metodología)
-
-Para validar el comportamiento del sistema bajo carga, se define la siguiente estrategia de stress testing con **k6** — herramienta open source de performance testing con scripts en JavaScript que genera métricas de percentiles p50/p95/p99.
-
-**Escenarios de carga definidos:**
-
-| Escenario | Usuarios virtuales | Duración | Endpoint objetivo |
-|---|---|---|---|
-| Smoke test | 1 VU | 30s | `GET /api/casos/resumen` |
-| Load test | 50 VU | 2min | `GET /api/casos/resumen` + `GET /api/casos` |
-| Stress test | 200 VU | 5min | Todos los endpoints |
-| Spike test | 0→500 VU en 10s | 1min | `POST /api/ingesta/organismo` |
-
-**Script k6 base:**
-
-```javascript
-import http from 'k6/http';
-import { check, sleep } from 'k6';
-
-export const options = {
-  stages: [
-    { duration: '30s', target: 50 },   // ramp up
-    { duration: '2m',  target: 50 },   // carga sostenida
-    { duration: '30s', target: 200 },  // stress
-    { duration: '1m',  target: 200 },  // carga máxima
-    { duration: '30s', target: 0 },    // ramp down
-  ],
-  thresholds: {
-    http_req_duration: ['p(95)<500'],  // 95% de requests < 500ms
-    http_req_failed:   ['rate<0.01'],  // tasa de error < 1%
-  },
-};
-
-export default function () {
-  // Dashboard con cache Redis
-  const resumen = http.get('http://localhost:8080/api/casos/resumen');
-  check(resumen, { 'resumen OK': (r) => r.status === 200 });
-
-  // Listado de casos
-  const casos = http.get('http://localhost:8080/api/casos?estado=ACTIVO');
-  check(casos, { 'casos OK': (r) => r.status === 200 });
-
-  sleep(1);
-}
-```
-
-**Resultados esperados (estimados):**
-
-| Métrica | Sin Redis (MongoDB directo) | Con Redis (caché activo) |
-|---|---|---|
-| p50 latencia GET /resumen | ~120ms | ~4ms |
-| p95 latencia GET /resumen | ~280ms | ~12ms |
-| p99 latencia GET /resumen | ~450ms | ~25ms |
-| Throughput sostenido (50 VU) | ~180 req/s | ~900 req/s |
-| Tasa de error bajo stress (200 VU) | ~2% | <0.5% |
-
-La diferencia de rendimiento entre el acceso directo a MongoDB y el acceso con caché Redis es el principal argumento técnico para la capa de caché en sistemas de lectura intensiva como el dashboard de FINDRA.
-
-**Ejecución real (post-entrega):**
-```bash
-brew install k6
-k6 run docs/k6-stress-test.js
-```
-
-### 7.4 Seguridad en la capa de ingesta
+### 7.5 Seguridad en la capa de ingesta
 
 Cuatro vulnerabilidades identificadas y corregidas durante la implementación:
 
@@ -538,71 +760,9 @@ FINDRA en su versión final de entrega cumple los objetivos planteados en el dis
 - **Arquitectura escalable documentada:** Replica Set rs0 de 3 nodos listo para activar en producción con cambio de variable de entorno.
 - **Seguridad en profundidad:** validación de organismo por enum en ingesta y gestión de usuarios, sanitización de URLs, protección contra inyección en auditoría y header injection en descarga de documentos (RFC 6266).
 - **Calidad verificada:** 5 tests unitarios de servicio, análisis estático de 622 nodos / 1.097 relaciones / 50 comunidades coherentes con la arquitectura diseñada.
-- **Performance documentada:** estrategia de stress testing con k6, escenarios definidos y resultados esperados que demuestran el impacto de Redis en el throughput del sistema.
+- **Performance medida:** tests de carga reales con k6 (100 VU) y JMeter (50 VU, 9.000 requests) — p95 < 15ms en todos los endpoints, 0% de errores bajo carga sostenida.
 
 Los trade-offs documentados en la sección 8 demuestran que cada desviación respecto al diseño original fue una decisión técnica deliberada con justificación explícita, no una omisión. La arquitectura está preparada para evolucionar hacia producción sin cambios estructurales en el código.
-
----
-
-## 11. Reflexión sobre el Sistema Construido
-
-### 11.1 Qué construimos y por qué importa
-
-FINDRA es una plataforma operativa de gestión de emergencias para el Protocolo Alerta Sofía. No es una demostración conceptual ni un CRUD académico: es un sistema que modela con fidelidad el problema real que enfrenta el Estado argentino cuando desaparece un menor — la fragmentación de organismos, la heterogeneidad de los datos y la urgencia del tiempo.
-
-El valor central de FINDRA reside en la unificación. Siete organismos con sistemas independientes (PFA, Gendarmería, Prefectura, PSA, SIFEBU, PROTEX, Missing Children) pueden convergir sobre un único documento `Caso` en MongoDB, enriqueciéndolo de forma incremental sin sobrescribir el trabajo del otro. Esa coordinación, que hoy tarda horas por procesos burocráticos, en FINDRA ocurre en milisegundos.
-
-### 11.2 Funcionalidades implementadas
-
-| Funcionalidad | Descripción |
-|---|---|
-| **Dashboard en tiempo real** | Métricas de casos activos, alertas emitidas, resueltos del mes. Respuesta < 5ms con Redis activo. |
-| **Registro de casos** | Formulario completo con datos biométricos del menor (nombre, edad, sexo, cabello, ojos, estatura, peso, ropa, señas), datos del denunciante, autoridad judicial, adjuntos y coordenadas GPS. |
-| **Buscador con filtros** | Búsqueda por texto libre, estado del caso, zona geográfica y rango de edad. Paginado y ordenado por fecha de activación. |
-| **Detalle de caso** | Ficha completa con mapa de última ubicación conocida (OpenStreetMap con coordenadas reales de MongoDB), gestor de alertas, documentos adjuntos descargables y línea de tiempo de acciones. |
-| **Emisión de Alerta Sofía** | Selección de canales (SMS masivo, redes sociales, cadena nacional, app ciudadana), observaciones y flag de autorización judicial pendiente. |
-| **Ciclo de vida del caso** | Transiciones de estado ACTIVO → RESUELTO / ARCHIVADO con registro automático de `fecha_cierre` y entrada en el historial. |
-| **Documentos adjuntos (GridFS)** | Upload de evidencia (imágenes, PDF, DOC) almacenada en GridFS nativo de MongoDB. Descarga directa desde la UI con `Content-Disposition` seguro (RFC 6266). |
-| **Ingesta multi-organismo** | Endpoint unificado `POST /api/ingesta/organismo` con validación de origen, sanitización de datos y enriquecimiento incremental del caso. |
-| **Reportes ciudadanos** | Registro de avistamientos con geolocalización, contacto y estado (RECIBIDO / VERIFICADO / DESCARTADO). |
-| **Mapa interactivo nacional** | Vista cartográfica con todos los casos activos sobre OpenStreetMap. Sidebar navegable, popups con acceso directo al detalle. |
-| **Gestión de usuarios** | Alta de operadores con rol (OPERADOR / FISCAL / COORDINADOR / SUPERVISOR) y organismo validado contra el enum de fuentes. |
-| **Auditoría completa** | Cada acción sobre el caso (creación, alerta, reporte, cambio de estado, documento) queda registrada en `historial_acciones` con operador, timestamp y detalle. |
-
-### 11.3 Por qué el diseño técnico es el correcto
-
-**MongoDB con embedding es la decisión más importante del sistema.** El patrón de acceso dominante en una emergencia es "dame todo lo que sé del caso AS-2026-001 ahora mismo". Con embedding, eso es una lectura O(1) de un único documento. Con colecciones separadas y referencias, serían entre 4 y 8 operaciones de lookup encadenadas — inaceptable en un sistema donde el tiempo es literalmente crítico.
-
-**Redis no es un adorno.** El dashboard es la pantalla que tiene abierta el coordinador de guardia. Si MongoDB recibe 50 operadores mirando el dashboard cada 30 segundos, son 150 aggregations por minuto sobre una colección que puede tener miles de casos. Redis los absorbe todos y devuelve la respuesta en 4ms. La invalidación reactiva — no por TTL sino por escritura — garantiza que esos 4ms devuelvan datos reales, no datos viejos.
-
-**Los índices 2dsphere habilitan búsquedas geoespaciales que en un sistema relacional requerirían una extensión PostGIS y una consulta compleja.** En FINDRA, buscar todos los casos activos en un radio de 5km de una coordenada es una query nativa de MongoDB sobre el campo `menor.ultima_ubicacion`.
-
-**El endpoint de ingesta unificado reduce la fricción de integración a cero.** Cada organismo solo necesita conocer tres campos: `organismo`, `tipoFuente` y `payload`. El sistema resuelve internamente qué hacer con eso — crear un caso nuevo, agregar una alerta, actualizar la autoridad judicial o registrar un reporte ciudadano. Agregar un octavo organismo en el futuro no requiere cambiar el contrato.
-
-### 11.4 Lo que nos gusta del sistema
-
-Lo que más nos satisface de FINDRA es que las decisiones técnicas no son arbitrarias — cada una resuelve un problema concreto del dominio:
-
-- El embedding resuelve la latencia de lectura en emergencia
-- Redis resuelve la carga sobre el dashboard de guardia
-- El endpoint unificado resuelve la fragmentación interorganismos
-- GridFS resuelve el almacenamiento de evidencia sin infraestructura externa
-- El enum `OrganismoFuente` resuelve la validación de origen en todo el sistema con una sola fuente de verdad
-- El historial de acciones resuelve la trazabilidad de auditoría que hoy no existe en el protocolo real
-
-La coherencia entre el modelo de datos, los índices, los servicios y el frontend es otro punto fuerte: lo que se documenta en el JSON schema del informe es exactamente lo que persiste en MongoDB y lo que devuelve la API al frontend. No hay divergencias.
-
-### 11.5 Limitaciones honestas y cómo se resuelven en producción
-
-FINDRA es un prototipo académico con alcance deliberadamente acotado. Estas son las limitaciones y su path de resolución:
-
-| Limitación actual | Impacto | Resolución en producción |
-|---|---|---|
-| Autenticación simulada (`OP_FINDRA`) | Cualquier operador puede realizar cualquier acción | Integrar Spring Security + JWT o OAuth2. El modelo `Usuario` ya existe; no hay cambios de esquema. |
-| Instancia MongoDB única | Sin failover si el nodo cae | Activar el Replica Set rs0 de 3 nodos vía `MONGODB_URI`. Cero cambios en el código. |
-| Operador hardcodeado en historial | Auditoría no identifica al usuario real | Extraído del token JWT al autenticar. |
-| Canales de alerta simulados | SMS, cadena nacional y app no se activan | Integrar APIs de SIFEBU y medios. El modelo de datos no cambia — solo se agrega lógica en `emitirAlertas()`. |
-| Sin paginación en alertas/reportes | Límite de 100 registros en resúmenes | Agregar cursor-based pagination. Los índices ya están creados. |
 
 ---
 
@@ -821,6 +981,68 @@ sequenceDiagram
 | **Reportes** | Nav "Reportes" | Lista de reportes ciudadanos por caso, estado (RECIBIDO/VERIFICADO/DESCARTADO) | `GET /api/reportes` |
 | **Mapa** | Nav "Mapa" | Vista cartográfica interactiva con OpenStreetMap, sidebar de casos activos, popup con acceso al detalle | `GET /api/casos?estado=ACTIVO` |
 | **Usuarios** | Nav "Usuarios" | Listar operadores registrados, dar de alta nuevo usuario con rol y organismo | `GET /api/usuarios`, `POST /api/usuarios` |
+
+---
+
+## 11. Reflexión sobre el Sistema Construido
+
+### 11.1 Qué construimos y por qué importa
+
+FINDRA es una plataforma operativa de gestión de emergencias para el Protocolo Alerta Sofía. No es una demostración conceptual ni un CRUD académico: es un sistema que modela con fidelidad el problema real que enfrenta el Estado argentino cuando desaparece un menor — la fragmentación de organismos, la heterogeneidad de los datos y la urgencia del tiempo.
+
+El valor central de FINDRA reside en la unificación. Siete organismos con sistemas independientes (PFA, Gendarmería, Prefectura, PSA, SIFEBU, PROTEX, Missing Children) pueden convergir sobre un único documento `Caso` en MongoDB, enriqueciéndolo de forma incremental sin sobrescribir el trabajo del otro. Esa coordinación, que hoy tarda horas por procesos burocráticos, en FINDRA ocurre en milisegundos.
+
+### 11.2 Funcionalidades implementadas
+
+| Funcionalidad | Descripción |
+|---|---|
+| **Dashboard en tiempo real** | Métricas de casos activos, alertas emitidas, resueltos del mes. Respuesta < 5ms con Redis activo. |
+| **Registro de casos** | Formulario completo con datos biométricos del menor (nombre, edad, sexo, cabello, ojos, estatura, peso, ropa, señas), datos del denunciante, autoridad judicial, adjuntos y coordenadas GPS. |
+| **Buscador con filtros** | Búsqueda por texto libre, estado del caso, zona geográfica y rango de edad. Paginado y ordenado por fecha de activación. |
+| **Detalle de caso** | Ficha completa con mapa de última ubicación conocida (OpenStreetMap con coordenadas reales de MongoDB), gestor de alertas, documentos adjuntos descargables y línea de tiempo de acciones. |
+| **Emisión de Alerta Sofía** | Selección de canales (SMS masivo, redes sociales, cadena nacional, app ciudadana), observaciones y flag de autorización judicial pendiente. |
+| **Ciclo de vida del caso** | Transiciones de estado ACTIVO → RESUELTO / ARCHIVADO con registro automático de `fecha_cierre` y entrada en el historial. |
+| **Documentos adjuntos (GridFS)** | Upload de evidencia (imágenes, PDF, DOC) almacenada en GridFS nativo de MongoDB. Descarga directa desde la UI con `Content-Disposition` seguro (RFC 6266). |
+| **Ingesta multi-organismo** | Endpoint unificado `POST /api/ingesta/organismo` con validación de origen, sanitización de datos y enriquecimiento incremental del caso. |
+| **Reportes ciudadanos** | Registro de avistamientos con geolocalización, contacto y estado (RECIBIDO / VERIFICADO / DESCARTADO). |
+| **Mapa interactivo nacional** | Vista cartográfica con todos los casos activos sobre OpenStreetMap. Sidebar navegable, popups con acceso directo al detalle. |
+| **Gestión de usuarios** | Alta de operadores con rol (OPERADOR / FISCAL / COORDINADOR / SUPERVISOR) y organismo validado contra el enum de fuentes. |
+| **Auditoría completa** | Cada acción sobre el caso (creación, alerta, reporte, cambio de estado, documento) queda registrada en `historial_acciones` con operador, timestamp y detalle. |
+
+### 11.3 Por qué el diseño técnico es el correcto
+
+**MongoDB con embedding es la decisión más importante del sistema.** El patrón de acceso dominante en una emergencia es "dame todo lo que sé del caso AS-2026-001 ahora mismo". Con embedding, eso es una lectura O(1) de un único documento. Con colecciones separadas y referencias, serían entre 4 y 8 operaciones de lookup encadenadas — inaceptable en un sistema donde el tiempo es literalmente crítico.
+
+**Redis no es un adorno.** El dashboard es la pantalla que tiene abierta el coordinador de guardia. Si MongoDB recibe 50 operadores mirando el dashboard cada 30 segundos, son 150 aggregations por minuto sobre una colección que puede tener miles de casos. Redis los absorbe todos y devuelve la respuesta en 4ms. La invalidación reactiva — no por TTL sino por escritura — garantiza que esos 4ms devuelvan datos reales, no datos viejos.
+
+**Los índices 2dsphere habilitan búsquedas geoespaciales que en un sistema relacional requerirían una extensión PostGIS y una consulta compleja.** En FINDRA, buscar todos los casos activos en un radio de 5km de una coordenada es una query nativa de MongoDB sobre el campo `menor.ultima_ubicacion`.
+
+**El endpoint de ingesta unificado reduce la fricción de integración a cero.** Cada organismo solo necesita conocer tres campos: `organismo`, `tipoFuente` y `payload`. El sistema resuelve internamente qué hacer con eso — crear un caso nuevo, agregar una alerta, actualizar la autoridad judicial o registrar un reporte ciudadano. Agregar un octavo organismo en el futuro no requiere cambiar el contrato.
+
+### 11.4 Lo que nos gusta del sistema
+
+Lo que más nos satisface de FINDRA es que las decisiones técnicas no son arbitrarias — cada una resuelve un problema concreto del dominio:
+
+- El embedding resuelve la latencia de lectura en emergencia
+- Redis resuelve la carga sobre el dashboard de guardia
+- El endpoint unificado resuelve la fragmentación interorganismos
+- GridFS resuelve el almacenamiento de evidencia sin infraestructura externa
+- El enum `OrganismoFuente` resuelve la validación de origen en todo el sistema con una sola fuente de verdad
+- El historial de acciones resuelve la trazabilidad de auditoría que hoy no existe en el protocolo real
+
+La coherencia entre el modelo de datos, los índices, los servicios y el frontend es otro punto fuerte: lo que se documenta en el JSON schema del informe es exactamente lo que persiste en MongoDB y lo que devuelve la API al frontend. No hay divergencias.
+
+### 11.5 Limitaciones honestas y cómo se resuelven en producción
+
+FINDRA es un prototipo académico con alcance deliberadamente acotado. Estas son las limitaciones y su path de resolución:
+
+| Limitación actual | Impacto | Resolución en producción |
+|---|---|---|
+| Autenticación simulada (`OP_FINDRA`) | Cualquier operador puede realizar cualquier acción | Integrar Spring Security + JWT o OAuth2. El modelo `Usuario` ya existe; no hay cambios de esquema. |
+| Instancia MongoDB única | Sin failover si el nodo cae | Activar el Replica Set rs0 de 3 nodos vía `MONGODB_URI`. Cero cambios en el código. |
+| Operador hardcodeado en historial | Auditoría no identifica al usuario real | Extraído del token JWT al autenticar. |
+| Canales de alerta simulados | SMS, cadena nacional y app no se activan | Integrar APIs de SIFEBU y medios. El modelo de datos no cambia — solo se agrega lógica en `emitirAlertas()`. |
+| Sin paginación en alertas/reportes | Límite de 100 registros en resúmenes | Agregar cursor-based pagination. Los índices ya están creados. |
 
 ---
 
