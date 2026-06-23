@@ -1,6 +1,7 @@
 package com.findra.service;
 
 import com.findra.dto.UsuarioRequest;
+import com.findra.model.OrganismoFuente;
 import com.findra.model.Usuario;
 import com.findra.repository.UsuarioRepository;
 import java.util.List;
@@ -24,7 +25,13 @@ public class UsuarioService {
         Usuario usuario = new Usuario();
         usuario.setNombre(request.nombre().trim());
         usuario.setRol(request.rol().trim().toUpperCase());
-        usuario.setOrganismo(request.organismo().trim().toUpperCase());
+        String organismoNorm = request.organismo().trim().toUpperCase();
+        try {
+            OrganismoFuente.valueOf(organismoNorm);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Organismo no reconocido: " + organismoNorm);
+        }
+        usuario.setOrganismo(organismoNorm);
         return usuarioRepository.save(usuario);
     }
 }
