@@ -123,6 +123,9 @@ public class CasoService {
         Caso caso = obtenerPorCasoId(casoId);
         caso.setEstado(request.estado());
         caso.setResultado(request.resultado());
+        if (request.estado() == EstadoCaso.RESUELTO || request.estado() == EstadoCaso.ARCHIVADO) {
+            caso.setFechaCierre(Instant.now());
+        }
         caso.getHistorialAcciones().add(new AccionHistorial(
                 "estado_actualizado",
                 operador(request.operador()),

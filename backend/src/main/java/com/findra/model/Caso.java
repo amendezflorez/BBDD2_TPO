@@ -23,6 +23,9 @@ public class Caso {
     @Field("fecha_activacion")
     private Instant fechaActivacion;
 
+    @Field("fecha_cierre")
+    private Instant fechaCierre;
+
     private String zona;
     private Menor menor;
     private Denunciante denunciante;
@@ -74,6 +77,14 @@ public class Caso {
 
     public void setFechaActivacion(Instant fechaActivacion) {
         this.fechaActivacion = fechaActivacion;
+    }
+
+    public Instant getFechaCierre() {
+        return fechaCierre;
+    }
+
+    public void setFechaCierre(Instant fechaCierre) {
+        this.fechaCierre = fechaCierre;
     }
 
     public String getZona() {
