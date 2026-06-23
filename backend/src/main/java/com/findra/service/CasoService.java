@@ -103,7 +103,11 @@ public class CasoService {
         long siguiente = mongoTemplate.count(
                 Query.query(Criteria.where("caso_id").regex("^AS-" + year + "-")),
                 Caso.class) + 1;
-        caso.setCasoId(String.format("AS-%d-%03d", year, siguiente));
+        String casoId = String.format("AS-%d-%03d", year, siguiente);
+        caso.setCasoId(casoId);
+        if (caso.getMenor() != null && caso.getMenor().getFotoUrl() == null) {
+            caso.getMenor().setFotoUrl("/media/" + casoId + "/foto_principal.jpg");
+        }
         caso.setFechaActivacion(Instant.now());
         caso.setEstado(EstadoCaso.ACTIVO);
         caso.getHistorialAcciones().add(new AccionHistorial(

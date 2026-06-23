@@ -12,10 +12,8 @@ import com.findra.model.Menor;
 import com.findra.model.ReporteCiudadano;
 import com.findra.model.Ubicacion;
 import java.time.Instant;
-import java.time.Year;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.regex.Pattern;
 import org.springframework.stereotype.Component;
 
@@ -24,15 +22,13 @@ import org.springframework.stereotype.Component;
 public class IngestaMapper {
 
     public Caso mapDenunciaFormal(String organismo, Map<String, Object> payload) {
-        String casoId = "AS-" + Year.now() + "-" + UUID.randomUUID().toString().replace("-", "").substring(0, 6).toUpperCase();
-
         Menor menor = new Menor();
         menor.setNombre(str(payload, "menor_nombre"));
         Integer edad = intVal(payload, "menor_edad");
         if (edad != null) menor.setEdad(edad);
         menor.setSexo(str(payload, "menor_sexo"));
         String fotoRaw = str(payload, "menor_foto");
-        menor.setFotoUrl(fotoRaw != null ? safeUrl(fotoRaw) : "/media/" + casoId + "/foto_principal.jpg");
+        menor.setFotoUrl(fotoRaw != null ? safeUrl(fotoRaw) : null);
 
         String descripcionFisica = str(payload, "descripcion_fisica");
         if (descripcionFisica != null) {
@@ -62,7 +58,6 @@ public class IngestaMapper {
         }
 
         Caso caso = new Caso();
-        caso.setCasoId(casoId);
         caso.setZona(str(payload, "zona"));
         caso.setMenor(menor);
         caso.setDenunciante(denunciante);
@@ -217,6 +212,6 @@ public class IngestaMapper {
 
     private Instant instant(Map<String, Object> m, String key) {
         String s = str(m, key);
-        return s != null ? Instant.parse(s) : Instant.now();
+        return s != null ? Instant.parse(s) : null;
     }
 }
