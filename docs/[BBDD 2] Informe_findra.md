@@ -81,7 +81,12 @@ Esta decisión responde al patrón de acceso dominante del sistema: la operació
     "nombre": "María Fernanda López",
     "edad": 8,
     "sexo": "F",
-    "senas": "Cabello castaño, altura 1.20m, lunar en mejilla derecha",
+    "cabello": "Castaño, largo",
+    "ojos": "Marrones",
+    "estatura": "1.20 m",
+    "peso": "28 kg",
+    "ropa": "Remera rosa, jeans azul",
+    "senas": "Lunar en mejilla derecha",
     "foto_url": "/media/AS-2026-A3F2B1/foto_principal.jpg",
     "ultima_ubicacion": {
       "type": "Point",
@@ -106,7 +111,8 @@ Esta decisión responde al patrón de acceso dominante del sistema: la operació
       "timestamp": "2026-04-15T10:35:00Z",
       "plataforma": "SIFEBU",
       "operador": "SIFEBU",
-      "estado": "ENVIADA"
+      "estado": "ENVIADA",
+      "observaciones": null
     },
     {
       "canal": "redes_sociales",
@@ -114,7 +120,8 @@ Esta decisión responde al patrón de acceso dominante del sistema: la operació
       "timestamp": "2026-04-15T10:37:00Z",
       "plataforma": "Facebook",
       "operador": "SIFEBU",
-      "estado": "ENVIADA"
+      "estado": "REQUIERE_AUTORIZACION",
+      "observaciones": "Pendiente aprobación coordinador"
     }
   ],
   "reportes_ciudadanos": [
@@ -132,7 +139,8 @@ Esta decisión responde al patrón de acceso dominante del sistema: la operació
   "documentos_adjuntos": [
     {
       "tipo": "denuncia_policial",
-      "url": "/media/AS-2026-A3F2B1/denuncia_pfa.pdf",
+      "url": "denuncia_pfa.pdf",
+      "grid_fs_id": "64f1a2b3c4d5e6f7a8b9c0d2",
       "organismo": "PFA",
       "timestamp": "2026-04-15T10:32:00Z"
     }
@@ -160,22 +168,19 @@ Esta decisión responde al patrón de acceso dominante del sistema: la operació
 // Acceso principal — lookup directo O(1)
 db.casos.createIndex({ "caso_id": 1 }, { unique: true })
 
-// Filtros operativos frecuentes
+// Filtros operativos frecuentes — búsqueda por estado y orden cronológico
 db.casos.createIndex({ "estado": 1, "fecha_activacion": -1 })
 
-// Búsqueda por nombre del menor
-db.casos.createIndex({ "menor.nombre": "text" })
+// Filtro biométrico — edad y sexo del menor
+db.casos.createIndex({ "menor.edad": 1, "menor.sexo": 1 })
 
-// Filtro por zona y edad
-db.casos.createIndex({ "zona": 1, "menor.edad": 1 })
-
-// Geoespacial — última ubicación del menor
+// Geoespacial — última ubicación conocida del menor
 db.casos.createIndex({ "menor.ultima_ubicacion": "2dsphere" })
 
-// Geoespacial — reportes ciudadanos
+// Geoespacial — ubicaciones de reportes ciudadanos
 db.casos.createIndex({ "reportes_ciudadanos.ubicacion": "2dsphere" })
 
-// Auditoría
+// Auditoría — trazabilidad por operador
 db.casos.createIndex({ "historial_acciones.operador": 1 })
 ```
 
