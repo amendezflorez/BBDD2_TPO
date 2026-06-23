@@ -3,6 +3,7 @@ package com.findra.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.findra.dto.EmitirAlertaRequest;
@@ -16,16 +17,20 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.gridfs.GridFsTemplate;
 
 class CasoServiceTest {
 
+    private CasoService service(CasoRepository repository, MongoOperations mongoTemplate) {
+        return new CasoService(repository, mongoTemplate, mock(GridFsTemplate.class));
+    }
+
     @Test
     void emitirAlertasRegistraAlertaYHistorial() {
-        CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
+        CasoRepository repository = mock(CasoRepository.class);
+        MongoOperations mongoTemplate = mock(MongoOperations.class);
         Caso caso = new Caso();
         caso.setCasoId("AS-2025-001");
         caso.setEstado(EstadoCaso.ACTIVO);
@@ -35,8 +40,7 @@ class CasoServiceTest {
         when(repository.findByCasoId("AS-2025-001")).thenReturn(Optional.of(caso));
         when(repository.save(caso)).thenReturn(caso);
 
-        CasoService service = new CasoService(repository, mongoTemplate);
-        Caso actualizado = service.emitirAlertas("AS-2025-001",
+        Caso actualizado = service(repository, mongoTemplate).emitirAlertas("AS-2025-001",
                 new EmitirAlertaRequest(List.of("SMS masivo"), "Prueba", false, "Op. Test"));
 
         assertThat(actualizado.getAlertasEmitidas()).hasSize(1);
@@ -47,8 +51,8 @@ class CasoServiceTest {
 
     @Test
     void registrarReporteAgregaReporteYHistorial() {
-        CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
+        CasoRepository repository = mock(CasoRepository.class);
+        MongoOperations mongoTemplate = mock(MongoOperations.class);
         Caso caso = new Caso();
         caso.setCasoId("AS-2025-002");
         caso.setEstado(EstadoCaso.ACTIVO);
@@ -57,8 +61,7 @@ class CasoServiceTest {
         when(repository.findByCasoId("AS-2025-002")).thenReturn(Optional.of(caso));
         when(repository.save(caso)).thenReturn(caso);
 
-        CasoService service = new CasoService(repository, mongoTemplate);
-        Caso actualizado = service.registrarReporte("AS-2025-002",
+        Caso actualizado = service(repository, mongoTemplate).registrarReporte("AS-2025-002",
                 new ReporteRequest(-58.38, -34.60, "Visto en plaza", "134", "Op. Test"));
 
         assertThat(actualizado.getReportesCiudadanos()).hasSize(1);
@@ -69,8 +72,8 @@ class CasoServiceTest {
 
     @Test
     void actualizarEstadoCambiaEstadoYRegistraHistorial() {
-        CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
+        CasoRepository repository = mock(CasoRepository.class);
+        MongoOperations mongoTemplate = mock(MongoOperations.class);
         Caso caso = new Caso();
         caso.setCasoId("AS-2025-003");
         caso.setEstado(EstadoCaso.ACTIVO);
@@ -79,8 +82,7 @@ class CasoServiceTest {
         when(repository.findByCasoId("AS-2025-003")).thenReturn(Optional.of(caso));
         when(repository.save(caso)).thenReturn(caso);
 
-        CasoService service = new CasoService(repository, mongoTemplate);
-        Caso actualizado = service.actualizarEstado("AS-2025-003",
+        Caso actualizado = service(repository, mongoTemplate).actualizarEstado("AS-2025-003",
                 new EstadoCasoRequest(EstadoCaso.RESUELTO, "Menor localizado", "Op. Test"));
 
         assertThat(actualizado.getEstado()).isEqualTo(EstadoCaso.RESUELTO);
@@ -91,15 +93,14 @@ class CasoServiceTest {
 
     @Test
     void crearCasoSetearFechaActivacionYEstadoActivo() {
-        CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
+        CasoRepository repository = mock(CasoRepository.class);
+        MongoOperations mongoTemplate = mock(MongoOperations.class);
         Caso caso = new Caso();
-        caso.setCasoId("AS-2025-004");
 
+        when(mongoTemplate.count(any(Query.class), eq(Caso.class))).thenReturn(0L);
         when(repository.save(any(Caso.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        CasoService service = new CasoService(repository, mongoTemplate);
-        Caso creado = service.crear(caso);
+        Caso creado = service(repository, mongoTemplate).crear(caso);
 
         assertThat(creado.getEstado()).isEqualTo(EstadoCaso.ACTIVO);
         assertThat(creado.getFechaActivacion()).isNotNull();
@@ -109,16 +110,15 @@ class CasoServiceTest {
 
     @Test
     void buscarFiltrarPorEstadoInvocaMongoTemplate() {
-        CasoRepository repository = Mockito.mock(CasoRepository.class);
-        MongoOperations mongoTemplate = Mockito.mock(MongoOperations.class);
+        CasoRepository repository = mock(CasoRepository.class);
+        MongoOperations mongoTemplate = mock(MongoOperations.class);
         Caso caso = new Caso();
         caso.setCasoId("AS-2025-005");
         caso.setEstado(EstadoCaso.ACTIVO);
 
         when(mongoTemplate.find(any(Query.class), eq(Caso.class))).thenReturn(List.of(caso));
 
-        CasoService service = new CasoService(repository, mongoTemplate);
-        List<Caso> resultado = service.buscar(null, EstadoCaso.ACTIVO, null, null, null, 0, 10);
+        List<Caso> resultado = service(repository, mongoTemplate).buscar(null, EstadoCaso.ACTIVO, null, null, null, 0, 10);
 
         assertThat(resultado).hasSize(1);
         assertThat(resultado.get(0).getCasoId()).isEqualTo("AS-2025-005");
