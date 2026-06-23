@@ -175,7 +175,7 @@ public class CasoService {
 
     public List<AlertaResumenDto> obtenerResumenAlertas() {
         Query query = Query.query(Criteria.where("alertas_emitidas.0").exists(true));
-        query.with(Sort.by(Sort.Direction.DESC, "fecha_activacion"));
+        query.with(Sort.by(Sort.Direction.DESC, "fecha_activacion")).limit(100);
 
         return mongoTemplate.find(query, Caso.class).stream()
                 .map(caso -> {
@@ -198,7 +198,7 @@ public class CasoService {
 
     public List<ReporteResumenDto> obtenerResumenReportes() {
         Query query = Query.query(Criteria.where("reportes_ciudadanos.0").exists(true));
-        query.with(Sort.by(Sort.Direction.DESC, "fecha_activacion"));
+        query.with(Sort.by(Sort.Direction.DESC, "fecha_activacion")).limit(100);
 
         return mongoTemplate.find(query, Caso.class).stream()
                 .map(caso -> {
