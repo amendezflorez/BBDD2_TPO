@@ -18,7 +18,10 @@ public class ApiExceptionHandler {
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException exception) {
-        return ResponseEntity.badRequest().body(errorBody("Solicitud invalida"));
+        String detail = exception.getBindingResult().getFieldErrors().stream()
+                .map(e -> e.getField() + ": " + e.getDefaultMessage())
+                .collect(java.util.stream.Collectors.joining(", "));
+        return ResponseEntity.badRequest().body(errorBody(detail.isBlank() ? "Solicitud invalida" : detail));
     }
 
     private Map<String, Object> errorBody(String message) {
