@@ -427,7 +427,7 @@ graph TB
     PFA & SIFEBU & PROTEX & GEND & PREF & PSA & MC -->|REST POST /api/ingesta/organismo| INGESTA
     OP -->|HTTP| UI
     UI -->|REST JSON| CASOS & DASH & ALERT & REP & USR
-    INGESTA & CASOS & DASH & ALERT & REP & USR -->|@Cacheable / @CacheEvict| REDIS
+    INGESTA & CASOS & DASH & ALERT & REP & USR -->|Cacheable / CacheEvict| REDIS
     INGESTA & CASOS & DASH & ALERT & REP & USR -->|MongoRepository / MongoTemplate| MONGO
     CASOS -->|GridFsTemplate| GFS
     MONGO -.->|replicación| RS
