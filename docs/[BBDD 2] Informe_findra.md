@@ -64,7 +64,9 @@ La pertinencia de abordar este problema trasciende el ejercicio académico. Resp
 
 FINDRA utiliza un modelo orientado a documentos donde cada caso activo del Protocolo Alerta Sofía se representa como un único documento JSON autocontenido en MongoDB. Todos los sub-documentos (alertas, reportes, documentos adjuntos, historial de acciones) son **arrays embebidos** dentro del documento `Caso`, no colecciones separadas.
 
-Esta decisión responde al patrón de acceso dominante del sistema: la operación más frecuente es "dame todo lo que sé del caso AS-2025-001", que con embedding es una lectura O(1) de un único documento versus múltiples JOINs o lookups en esquemas normalizados.
+El criterio de diseño central fue el **patrón de acceso dominante**: en un sistema de emergencias, la operación más frecuente es "dame todo lo que sé del caso AS-2026-001 ahora mismo". Con embedding, esa operación es una lectura O(1) de un único documento. Las escrituras incrementales de cada organismo son `$push` atómicos sobre arrays del mismo documento — sin joins, sin transacciones multi-colección, sin migraciones de esquema ante nuevos tipos de dato.
+
+El embedding tiene un límite de 16 MB por documento en MongoDB. Para FINDRA no es un riesgo real: un caso del Protocolo Alerta Sofía tiene un ciclo de vida acotado (horas o días) y la cantidad de alertas, reportes y acciones que puede acumular está muy por debajo del límite. Si los arrays de reportes ciudadanos crecieran de forma masiva en producción, la solución es extraerlos a una colección separada con referencia por `casoId` — sin cambios en la API ni en el resto del modelo.
 
 **Estructura del documento principal:**
 
@@ -162,39 +164,79 @@ Esta decisión responde al patrón de acceso dominante del sistema: la operació
 }
 ```
 
+**Anatomía del documento — campos clave:**
+
+| Campo | Tipo MongoDB | Descripción | Notas de diseño |
+|---|---|---|---|
+| `_id` | ObjectId | Clave primaria generada por MongoDB | Inmutable, indexado por defecto |
+| `caso_id` | String | Identificador legible del caso (`AS-YYYY-XXXXXX`) | Índice único; usado en todas las referencias interinstitucionales |
+| `estado` | String (enum) | Ciclo de vida del caso: `ACTIVO` / `RESUELTO` / `ARCHIVADO` | Controla qué operaciones están habilitadas en la UI |
+| `fecha_activacion` | Date (ISODate) | Timestamp de creación del caso | Ordenamiento por defecto en el dashboard |
+| `fecha_cierre` | Date (ISODate) | Timestamp de resolución o archivo | `null` mientras el caso está activo; asignado automáticamente en la transición |
+| `zona` | String | Jurisdicción geográfica del caso | Filtro operativo frecuente (índice compuesto con `estado`) |
+| `menor` | Object embebido | Datos biométricos + última ubicación GPS del menor | Sub-documento único; incluye coordenadas GeoJSON para índice 2dsphere |
+| `denunciante` | Object embebido | Datos de contacto del denunciante | Sub-documento único; no varía después de la creación |
+| `autoridad_judicial` | Object embebido | Juez, fiscal y número de expediente | Actualizable por ingesta `notificacion_judicial` de PROTEX |
+| `alertas_emitidas` | Array de objetos | Canales de alerta activados con estado y timestamp | Crece via `$push`; nunca se sobreescribe |
+| `reportes_ciudadanos` | Array de objetos | Avistamientos con coordenadas GeoJSON y estado | Crece via `$push`; índice 2dsphere sobre `ubicacion` |
+| `documentos_adjuntos` | Array de objetos | Referencias a binarios en GridFS (`grid_fs_id`) | Solo almacena el `ObjectId` de referencia; el binario vive en `fs.chunks` |
+| `historial_acciones` | Array de objetos | Log cronológico de todas las operaciones sobre el caso | Append-only; base de la auditoría; nunca se modifica ni elimina |
+
 ### 3.2 Índices definidos
 
+Los índices se diseñaron a partir de los patrones de consulta reales del sistema — no de forma genérica. Cada índice resuelve una operación concreta que el sistema ejecuta con alta frecuencia o que tiene impacto crítico en la latencia.
+
 ```javascript
-// Acceso principal — lookup directo O(1)
+// 1. Acceso principal — lookup directo por identificador de caso
 db.casos.createIndex({ "caso_id": 1 }, { unique: true })
 
-// Filtros operativos frecuentes — búsqueda por estado y orden cronológico
+// 2. Filtros operativos — búsqueda por estado ordenada cronológicamente
 db.casos.createIndex({ "estado": 1, "fecha_activacion": -1 })
 
-// Filtro biométrico — edad y sexo del menor
+// 3. Filtro biométrico — búsqueda por características del menor
 db.casos.createIndex({ "menor.edad": 1, "menor.sexo": 1 })
 
-// Geoespacial — última ubicación conocida del menor
+// 4. Geoespacial — última ubicación conocida del menor
 db.casos.createIndex({ "menor.ultima_ubicacion": "2dsphere" })
 
-// Geoespacial — ubicaciones de reportes ciudadanos
+// 5. Geoespacial — ubicaciones de reportes ciudadanos
 db.casos.createIndex({ "reportes_ciudadanos.ubicacion": "2dsphere" })
 
-// Auditoría — trazabilidad por operador
+// 6. Auditoría — trazabilidad por operador en el historial
 db.casos.createIndex({ "historial_acciones.operador": 1 })
 ```
 
-### 3.3 Justificación del modelo
+**Descripción y justificación de cada índice:**
 
-| Requerimiento | Por qué embedding en MongoDB |
-|---|---|
-| Datos polimórficos por fuente | Schema flexible absorbe la variabilidad sin migraciones |
-| Lectura completa del caso | O(1) — un solo documento, sin joins |
-| Escritura incremental por organismo | `$push` a arrays embebidos; atómico a nivel documento |
-| Búsqueda geoespacial | Índices 2dsphere nativos sobre coordenadas anidadas |
-| Trazabilidad de acciones | Array `historial_acciones` ordenado cronológicamente dentro del mismo documento |
-| Consistencia en escrituras críticas | Escrituras atómicas a nivel documento; sin transacciones multi-colección necesarias |
-| Ciclo de vida del caso | `estado` (ACTIVO → RESUELTO / ARCHIVADO) + `fecha_cierre` asignada automáticamente en la transición de cierre |
+| # | Campos indexados | Tipo | Consulta que resuelve | Por qué este índice |
+|---|---|---|---|---|
+| 1 | `caso_id` | Único ASC | `GET /api/casos/{id}` — lookup directo por identificador | Es la clave de acceso primaria en todas las operaciones interinstitucionales. Sin índice, cada lookup escanea la colección completa. Único para garantizar que no existan dos casos con el mismo ID. |
+| 2 | `estado` + `fecha_activacion` | Compuesto ASC/DESC | `GET /api/casos?estado=ACTIVO` — lista del dashboard ordenada por fecha | El filtro más frecuente del sistema: el operador siempre trabaja con casos activos ordenados del más reciente al más antiguo. El índice compuesto resuelve filtro + orden en una sola operación de índice. |
+| 3 | `menor.edad` + `menor.sexo` | Compuesto ASC | Búsqueda biométrica — filtrar casos por rango de edad y sexo del menor | Permite cruzar avistamientos ciudadanos ("vi una nena de unos 8 años") con casos activos sin escanear todos los documentos. Índice sobre campos de sub-documento embebido, funcionalidad nativa de MongoDB. |
+| 4 | `menor.ultima_ubicacion` | 2dsphere | `GET /api/casos?cerca=[-58.38,-34.60]&radio=5km` — mapa de casos activos | Habilita consultas geoespaciales nativas (`$near`, `$geoWithin`) sobre la última coordenada GPS conocida del menor. Requiere formato GeoJSON `{type: "Point", coordinates: [lng, lat]}`. |
+| 5 | `reportes_ciudadanos.ubicacion` | 2dsphere | Búsqueda de avistamientos en un área geográfica | Mismo mecanismo que el índice 4 pero aplicado a los reportes ciudadanos dentro del array embebido. MongoDB soporta índices 2dsphere sobre arrays de sub-documentos con coordenadas GeoJSON. |
+| 6 | `historial_acciones.operador` | ASC | `GET /api/auditoria?operador=SIFEBU` — trazabilidad por organismo | Permite auditar todas las acciones realizadas por un organismo específico sin escanear el historial completo de todos los casos. Índice sobre campo de array embebido — MongoDB indexa cada elemento del array de forma individual. |
+
+### 3.3 Justificación del modelo — modelos evaluados y descartados
+
+Se evaluaron tres enfoques antes de adoptar el embedding completo en MongoDB:
+
+**Modelo relacional (PostgreSQL):** cada entidad en su propia tabla (`casos`, `alertas`, `reportes`, `documentos`, `historial`). Descartado porque la consulta dominante requeriría entre 4 y 6 JOINs, el esquema rígido obliga a migraciones cada vez que un organismo incorpora un nuevo tipo de dato, y las búsquedas geoespaciales requieren la extensión PostGIS con queries adicionales — complejidad innecesaria para el dominio.
+
+**NoSQL con colecciones separadas y referencias (MongoDB):** cada sub-entidad en su propia colección, referenciada por `casoId`. Descartado porque, aunque mejora la flexibilidad de esquema respecto al modelo relacional, no resuelve el problema de latencia: la consulta dominante seguiría requiriendo múltiples `$lookup` encadenados, y las escrituras consistentes entre colecciones requerirían transacciones multi-documento con su overhead de coordinación.
+
+**NoSQL con embedding completo (MongoDB) — modelo adoptado:** todo el caso vive en un único documento. Resuelve los problemas de ambas alternativas sin sus costos.
+
+| Requerimiento | Relacional | Referencias NoSQL | Embedding (adoptado) |
+|---|---|---|---|
+| Lectura completa del caso | 4–6 JOINs | 4–6 `$lookup` | O(1) — un documento |
+| Escritura incremental por organismo | INSERT en múltiples tablas + transacción | Update en múltiples colecciones + transacción | `$push` atómico en el mismo documento |
+| Datos polimórficos por fuente | Migraciones por cada nuevo tipo | Schema flexible ✓ | Schema flexible ✓ |
+| Búsqueda geoespacial | PostGIS + query compleja | 2dsphere ✓ | 2dsphere sobre sub-documentos ✓ |
+| Trazabilidad de acciones | Tabla `historial` separada + JOIN | Colección `historial` + `$lookup` | Array `historial_acciones` append-only en el mismo documento |
+| Consistencia en escrituras críticas | Transacción ACID multi-tabla | Transacción multi-colección | Atómica a nivel documento; sin transacciones |
+| Ciclo de vida del caso | Estado + fecha en tabla principal | Sincronización entre colecciones | `estado` + `fecha_cierre` en el mismo documento; transición en una escritura |
+| Escalabilidad del modelo | Sharding por tabla | Sharding por colección | Límite 16 MB/doc — controlado por ciclo de vida acotado del caso |
 
 ### 3.4 Diagrama del modelo de datos
 
@@ -285,11 +327,17 @@ Todo el modelo vive en un único documento MongoDB (`@Document(collection = "cas
 
 ### 4.1 Capas de la arquitectura
 
+FINDRA adopta una **arquitectura monolítica en capas** desplegada localmente. Esta decisión es deliberada y apropiada para el contexto académico: el foco del trabajo es el motor de base de datos NoSQL y el pipeline de datos, no la complejidad operativa de infraestructura distribuida. Un monolito bien estructurado en capas permite demostrar con claridad la separación de responsabilidades, la lógica de negocio y el modelo de datos sin introducir overhead de comunicación entre servicios que no aportaría valor al objetivo de la materia.
+
+La estructura interna del monolito respeta una separación estricta en capas con dependencias unidireccionales: `Controller → Service → Repository → Model`. Ninguna capa accede a la inmediatamente superior, y los DTOs actúan como contratos de interfaz entre la capa de presentación y la de aplicación. Esta separación es la misma que se aplicaría en una arquitectura de microservicios — la diferencia es que aquí todo corre en el mismo proceso, lo que simplifica el despliegue sin sacrificar la claridad del diseño.
+
+En un entorno de producción real, las capas de ingesta y procesamiento podrían extraerse como microservicios independientes sin cambios en el modelo de datos ni en los contratos REST — la frontera entre capas ya está definida en el código.
+
 **Capa de ingesta y fuentes de datos**
 Endpoint REST unificado (`POST /api/ingesta/organismo`) que recibe payloads de los 7 organismos participantes del protocolo. Cada payload se mapea al modelo canónico FINDRA según su `tipoFuente`, enriqueciendo el documento `Caso` de forma incremental sin sobrescribir datos existentes.
 
 **Capa de procesamiento y lógica de negocio**
-Spring Boot 3.3 con Java 21 como API Gateway. Valida, sanitiza y persiste los datos entrantes. Implementa las reglas del protocolo: verificación de requisitos de activación, registro automático del historial de acciones y emisión de Alertas Sofía por canales configurables.
+Spring Boot 3.3 con Java 21. Valida, sanitiza y persiste los datos entrantes. Implementa las reglas del protocolo: verificación de requisitos de activación, registro automático del historial de acciones y emisión de Alertas Sofía por canales configurables.
 
 **Capa de caché**
 Redis 7 como caché del resumen del dashboard (`GET /api/casos/resumen`). TTL de 30 segundos con invalidación reactiva mediante `@CacheEvict` ante cualquier escritura sobre casos. Reduce la carga sobre MongoDB para la consulta de mayor frecuencia del sistema.
@@ -300,7 +348,18 @@ MongoDB 8 como motor principal. En producción: Replica Set de 3 nodos (`rs0`) c
 **Capa de presentación**
 Dashboard React 18 + Vite consumiendo la API REST. Incluye: métricas en tiempo real, buscador con filtros, detalle de caso con mapa de coordenadas reales, formulario de alta, emisión de alertas y cierre/archivo de casos.
 
+**[FIGURA — Diagrama de arquitectura propuesta (Parcial 1)]**
+*Diseño conceptual inicial: pipeline de ingesta multi-organismo con validación, normalización y deduplicación hacia el backend REST y MongoDB. La implementación final conserva esta estructura y la expande con Redis, GridFS, el fallback de caché y los 7 organismos reales del protocolo — ver §4.4.*
+
 ### 4.2 Decisiones arquitectónicas clave
+
+| Decisión | Alternativa descartada | Razón |
+|---|---|---|
+| Monolito en capas | Microservicios | Complejidad operativa desproporcionada para el alcance académico; las fronteras entre capas están definidas y permiten extracción futura sin cambios en el modelo |
+| Replica Set 3 nodos (prod) | Instancia standalone | Sin failover automático; en emergencias la disponibilidad no es negociable |
+| Redis con invalidación reactiva | TTL puro | TTL puro puede devolver datos desactualizados; la invalidación por escritura garantiza consistencia inmediata |
+| Endpoint de ingesta unificado | API por organismo | N endpoints implica N contratos; el endpoint único centraliza la ingesta y permite agregar organismos sin cambiar el contrato |
+| Embedding completo | Colecciones separadas + referencias | La consulta dominante requiere el caso completo; embedding lo resuelve en O(1) sin joins ni transacciones multi-colección |
 
 **Replica Set sobre instancia standalone**
 En un sistema de emergencias, la disponibilidad no es negociable. El Replica Set con 3 nodos garantiza failover automático: si el nodo primario falla, un secundario asume el rol sin intervención manual. Las escrituras críticas usan `writeConcern: majority`, asegurando confirmación en al menos 2 nodos antes de responder al cliente.
@@ -314,42 +373,64 @@ En lugar de APIs punto a punto por organismo, un único contrato REST centraliza
 **Embedding completo sobre referencias**
 Todos los sub-documentos del caso viven en el mismo documento MongoDB. Esto elimina joins, garantiza consistencia atómica y reduce la latencia de lectura a una sola operación de disco.
 
-### 4.3 Diagrama de componentes (C4 — Nivel 2)
+### 4.3 Análisis de dependencias del sistema
+
+Se realizó un análisis estático completo del repositorio para validar la cohesión arquitectónica del código implementado. El grafo resultante comprende **622 nodos** (522 extraídos por AST + 100 conceptos semánticos de documentación) y **1.097 relaciones**, agrupados en **50 comunidades** detectadas mediante el algoritmo de Louvain.
+
+Las 50 comunidades se corresponden directamente con las capas de la arquitectura: controllers, services, mappers, modelos, DTOs, repositorios, configuración y frontend. La densidad de relaciones (~1.76 relaciones por nodo) es consistente con un sistema modular donde cada clase tiene responsabilidades acotadas.
+
+**[FIGURA — Grafo de dependencias del sistema]**
+*Grafo generado por análisis AST estático del repositorio. Cada nodo es un archivo o concepto; los colores indican la comunidad (módulo lógico) al que pertenece. El grafo completo e interactivo está disponible en `docs/graph.html`.*
+
+### 4.4 Diagrama de componentes (C4 — Nivel 2)
 
 ```mermaid
 graph TB
-    subgraph "Usuarios externos"
+    subgraph EXTERNOS["Organismos externos"]
+        PFA[API Policía Federal]
+        SIFEBU[API SIFEBU]
+        PROTEX[API PROTEX]
+        GEND[API Gendarmería]
+        PREF[API Prefectura]
+        PSA[API PSA]
+        MC[API Missing Children]
+    end
+
+    subgraph USUARIOS["Usuarios internos"]
         OP[Operador / Coordinador]
-        ORG[Organismo externo<br/>PFA · SIFEBU · PROTEX · etc.]
     end
 
-    subgraph "Capa de presentación"
+    subgraph PRESENTACION["Capa de presentación"]
         UI[React 18 + Vite<br/>localhost:5173]
-    end
-
-    subgraph "Capa de aplicación"
-        API[Spring Boot 3.3 · Java 21<br/>localhost:8080/api]
         SW[Swagger UI<br/>/swagger-ui.html]
     end
 
-    subgraph "Capa de caché"
-        REDIS[Redis 7<br/>localhost:6379<br/>TTL 30s · invalidación reactiva]
+    subgraph APLICACION["Capa de aplicación — Spring Boot 3.3 · Java 21 · localhost:8080"]
+        INGESTA[IngestaController<br/>POST /api/ingesta/organismo]
+        CASOS[CasoController<br/>/api/casos]
+        DASH[DashboardController<br/>/api/dashboard/resumen]
+        ALERT[AlertaController]
+        REP[ReporteController]
+        USR[UsuarioController]
     end
 
-    subgraph "Capa de persistencia"
-        direction TB
-        MONGO[(MongoDB 8<br/>colección: casos<br/>colección: usuarios)]
+    subgraph CACHE["Capa de caché"]
+        REDIS[Redis 7<br/>localhost:6379<br/>TTL 30s · invalidación reactiva<br/>fallback → JVM ConcurrentMapCache]
+    end
+
+    subgraph PERSISTENCIA["Capa de persistencia"]
+        MONGO[(MongoDB 8<br/>casos · usuarios)]
         GFS[(GridFS<br/>fs.files · fs.chunks<br/>binarios adjuntos)]
-        MONGORS["Producción: Replica Set rs0<br/>mongo1:27017 · mongo2:27017 · mongo3:27017<br/>writeConcern: majority"]
+        RS["⬡ Producción: Replica Set rs0<br/>mongo1 · mongo2 · mongo3<br/>writeConcern: majority"]
     end
 
+    PFA & SIFEBU & PROTEX & GEND & PREF & PSA & MC -->|REST POST /api/ingesta/organismo| INGESTA
     OP -->|HTTP| UI
-    ORG -->|REST POST /api/ingesta/organismo| API
-    UI -->|REST JSON| API
-    API -->|@Cacheable / @CacheEvict| REDIS
-    API -->|MongoRepository / MongoOperations| MONGO
-    API -->|GridFsTemplate| GFS
-    MONGO -.->|replicación| MONGORS
+    UI -->|REST JSON| CASOS & DASH & ALERT & REP & USR
+    INGESTA & CASOS & DASH & ALERT & REP & USR -->|@Cacheable / @CacheEvict| REDIS
+    INGESTA & CASOS & DASH & ALERT & REP & USR -->|MongoRepository / MongoTemplate| MONGO
+    CASOS -->|GridFsTemplate| GFS
+    MONGO -.->|replicación| RS
 ```
 
 ---
@@ -358,35 +439,45 @@ graph TB
 
 ### 5.1 Comparativa de motores NoSQL
 
-Se evaluaron todas las familias de bases de datos NoSQL disponibles en función de los requerimientos concretos del sistema:
+Se evaluaron todas las familias de bases de datos NoSQL en función de los requerimientos concretos del sistema. El criterio central fue el mismo que guió el modelado: el patrón de acceso dominante es la lectura completa de un caso con datos heterogéneos provenientes de múltiples organismos.
 
-| Motor | Tipo | Caso de uso ideal | Limitación en FINDRA | Decisión |
+| Motor | Tipo | Caso de uso ideal | Por qué no aplica a FINDRA | Decisión |
 |---|---|---|---|---|
-| **MongoDB 8** | Documentos | Datos semi-estructurados y variables | Ninguna relevante | **SELECCIONADO** |
-| Apache Cassandra | Columnar | Escrituras masivas distribuidas (IoT, logs) | Query-driven design: obliga a duplicar datos para distintos patrones de consulta | Descartado |
-| Neo4j | Grafos | Relaciones complejas entre entidades | Overhead innecesario; las entidades de FINDRA no son grafos | Descartado |
-| Redis | Clave-Valor | Caché y sesiones de alta velocidad | Sin persistencia estructurada ni consultas complejas | Caché, no BD principal |
-| HBase | Columnar (Hadoop) | Analítica de big data a escala masiva | Complejidad operativa desproporcionada para el volumen actual | Descartado |
+| **MongoDB 8** | Documentos | Datos semi-estructurados, variables y polimórficos con múltiples patrones de consulta | Cubre todos los requerimientos del sistema sin restricciones | **SELECCIONADO** |
+| Apache Cassandra | Columnar | Escrituras masivas distribuidas (IoT, logs) a escala de millones de registros/segundo | Query-driven design obliga a modelar una tabla por patrón de consulta — FINDRA tiene 6 patrones distintos, lo que implicaría duplicación masiva de datos | Descartado |
+| Neo4j | Grafos | Traversal de relaciones complejas entre entidades (redes sociales, grafos de conocimiento) | Las entidades de FINDRA (caso, menor, alerta, reporte) no forman un grafo — son sub-documentos de un mismo objeto, no nodos interconectados | Descartado |
+| Redis | Clave-Valor | Caché, sesiones y estructuras de datos en memoria de alta velocidad | Sin capacidad de consultas estructuradas, índices geoespaciales ni persistencia durable como motor principal | Caché, no BD principal |
+| HBase | Columnar (Hadoop) | Analítica de big data a escala de petabytes sobre HDFS | Complejidad operativa (ZooKeeper, HDFS, HMaster) desproporcionada para el volumen actual; sin soporte nativo para documentos embebidos ni consultas geoespaciales | Descartado |
 
-### 5.2 Por qué MongoDB es la elección correcta
+### 5.2 Por qué MongoDB es la elección correcta para FINDRA
 
-- **Schema flexible:** permite incorporar nuevos tipos de datos (biometría facial, nuevos organismos) sin migraciones
-- **Consultas ricas:** filtros por campos anidados, búsquedas geoespaciales 2dsphere, aggregation pipelines y full-text search nativos
-- **Escalabilidad horizontal:** sharding integrado en el motor, sin middleware adicional
-- **Alta disponibilidad:** Replica Set con failover automático, crítico para sistema de emergencias
-- **ACID en documento:** a partir de MongoDB 4.0, transacciones multi-documento garantizan consistencia para operaciones críticas
-- **Ecosistema maduro:** drivers oficiales para Java, Spring Data MongoDB, Compass para administración visual
+La materia es Ingeniería de Datos II con eje en NoSQL — la elección del motor no es periférica al trabajo, es su núcleo. Cada característica de MongoDB que se lista a continuación resuelve un problema concreto del dominio, no es una ventaja genérica del motor.
+
+**Schema flexible — absorbe la heterogeneidad real del protocolo**
+Los 7 organismos del Protocolo Alerta Sofía envían datos estructuralmente distintos: PFA envía una denuncia formal con datos biométricos, SIFEBU envía una notificación de alerta con canales y zonas, PROTEX envía documentos judiciales con número de expediente, Missing Children envía reportes de avistamiento con coordenadas GPS. En un esquema relacional, cada tipo requeriría su propia tabla y un JOIN para ensamblar el caso. En MongoDB, el schema flexible del documento `Caso` absorbe todos los tipos sin migraciones — agregar un octavo organismo con un nuevo tipo de dato no requiere alterar el modelo.
+
+**Consultas ricas sobre documentos embebidos — sin joins ni extensiones**
+MongoDB ejecuta filtros sobre campos anidados a cualquier profundidad, índices 2dsphere sobre coordenadas GeoJSON dentro de arrays embebidos, y aggregation pipelines que calculan métricas del dashboard (conteos por estado, alertas del día, resoluciones del mes) directamente en el motor sin transferir datos a la JVM. En PostgreSQL, las búsquedas geoespaciales requerirían la extensión PostGIS y queries adicionales; los datos embebidos como `menor.ultima_ubicacion` no tendrían representación natural en tablas.
+
+**Alta disponibilidad nativa — crítica para un sistema de emergencias**
+El Replica Set con 3 nodos y `writeConcern: majority` garantiza que cada escritura está confirmada en al menos 2 nodos antes de responder al cliente. Si el nodo primario falla, la elección automática de un secundario ocurre en segundos sin intervención manual. En un sistema donde la indisponibilidad puede impactar directamente en la búsqueda de un menor, este comportamiento no es opcional.
+
+**ACID a nivel documento — consistencia sin overhead de transacciones**
+Todas las escrituras sobre un caso — agregar una alerta, registrar un reporte, actualizar el estado, registrar la acción en el historial — ocurren sobre el mismo documento MongoDB y son atómicas por definición. La consistencia que en un modelo relacional requeriría una transacción multi-tabla está garantizada estructuralmente por el embedding.
+
+**Ecosistema Java maduro — integración directa con Spring Boot**
+Spring Data MongoDB provee `MongoRepository` con query derivation, `MongoTemplate` para operaciones avanzadas (`$push`, `$set`, aggregations), `GridFsTemplate` para almacenamiento de binarios y soporte nativo para `@Cacheable` con Redis. La integración no requiere adaptadores ni ORMs adicionales — el stack es coherente de punta a punta.
 
 ### 5.3 Comparativa del stack completo
 
 | Dimensión | Alternativa evaluada | Decisión FINDRA | Justificación |
 |---|---|---|---|
-| Base de datos | PostgreSQL (relacional) vs **MongoDB 8** | MongoDB | Datos polimórficos; schema flexible evita migraciones ante nuevos tipos de fuente |
-| Caché | Caffeine (in-process) vs **Redis 7** | Redis | Invalidación reactiva distribuida; preparado para escala horizontal |
-| Alta disponibilidad | Sharding por zona vs **Replica Set rs0** | Replica Set | Sharding agrega complejidad operativa alta para el volumen actual; Replica Set provee failover automático a menor costo |
-| Frontend | Angular 17 vs **React 18 + Vite** | React | Menor curva de aprendizaje; Vite reduce tiempos de build y HMR |
-| Runtime backend | Java 17 LTS vs **Java 21 LTS** | Java 21 | Soporte hasta 2031; Virtual Threads (Loom) disponibles; Records simplifican DTOs |
-| Modelo de datos | Referencias entre colecciones vs **Embedding** | Embedding | Patrón de acceso dominante es lectura completa del caso; O(1) sin joins |
+| Base de datos | PostgreSQL (relacional) | **MongoDB 8** | 7 organismos con estructuras de datos distintas hacen el esquema relacional rígido e ineficiente; datos geoespaciales, binarios (GridFS) y schema flexible son nativos en MongoDB sin extensiones |
+| Caché | Caffeine (in-process) | **Redis 7** | Caffeine es in-process: no provee coherencia entre múltiples instancias del API; Redis centraliza la invalidación reactiva y es preparado para escala horizontal |
+| Alta disponibilidad | Sharding por zona | **Replica Set rs0** | Sharding agrega complejidad operativa alta (balanceo, config servers, mongos) para el volumen actual; Replica Set provee failover automático a menor costo operativo |
+| Frontend | Angular 17 | **React 18 + Vite** | Angular introduce mayor complejidad estructural (módulos, decoradores, RxJS) innecesaria para el alcance del dashboard; Vite reduce tiempos de build y HMR al mínimo |
+| Runtime backend | Java 17 LTS | **Java 21 LTS** | Soporte LTS hasta 2031; Virtual Threads (Project Loom) disponibles para futura mejora de concurrencia sin refactor; Records simplifican los DTOs eliminando boilerplate |
+| Modelo de datos | Referencias entre colecciones | **Embedding completo** | Patrón de acceso dominante es lectura completa del caso; embedding resuelve en O(1) lo que con referencias requeriría 4–6 `$lookup` encadenados |
 
 ---
 
@@ -446,7 +537,16 @@ La invalidación reactiva garantiza que el dashboard refleje el estado real tras
 
 ### 6.3 Diagramas de secuencia
 
-Los diagramas de secuencia detallados de ambos flujos — incluyendo el ciclo Redis HIT/MISS, la emisión de alertas, el upload GridFS y el ciclo de vida del caso — se encuentran en la **§10 Guía Funcional** (diagramas 10.2 a 10.7).
+Los diagramas de secuencia detallados de ambos flujos se encuentran en la **§10 Guía Funcional**:
+
+| Flujo | Diagrama |
+|---|---|
+| Flujo A — Registro de caso nuevo | §10.2 |
+| Flujo B — Emisión de Alerta Sofía | §10.3 |
+| Flujo C — Ingesta multi-organismo vía API | §10.4 |
+| Flujo D — Dashboard con caché Redis (ciclo HIT/MISS) | §10.5 |
+| Flujo E — Cierre o archivo de caso | §10.6 |
+| Flujo F — Subida y descarga de documentos (GridFS) | §10.7 |
 
 ---
 
@@ -587,7 +687,17 @@ Thresholds  : p(95) < 500ms · error rate < 1%
 | Threshold p(95) < 500ms | **✓ PASS** | **✓ PASS** |
 | Threshold error rate < 1% | **✓ PASS** | **✓ PASS** |
 
-**Nota sobre los números:** el fallback JVM (`ConcurrentMapCacheManager`) muestra menor latencia en `/resumen` que Redis porque es un `HashMap` en el mismo proceso — sin red, sin serialización. En producción con Redis en servidor separado y múltiples instancias del API, los roles se invierten: Redis provee coherencia entre nodos, el cache JVM no. El resultado valida que el fallback es funcional y de bajo impacto, no que sea superior.
+**Lectura correcta de los números — entorno local vs. producción:**
+
+El resultado aparentemente contra-intuitivo — el fallback JVM más rápido que Redis en `/resumen` — tiene una explicación técnica directa: en el entorno de prueba, API y Redis corren en el mismo host físico (Podman, Apple Silicon). El `ConcurrentMapCacheManager` es un `HashMap` en el heap del mismo proceso JVM, con latencia de acceso en nanosegundos. Redis, incluso en localhost, implica una llamada de red al socket TCP del contenedor, serialización del valor a bytes y deserialización en la respuesta — overhead que en local se mide en milisegundos adicionales.
+
+En un entorno de producción real, esta relación se invierte por dos razones estructurales:
+
+1. **Coherencia entre instancias:** si el API escala horizontalmente (múltiples pods), cada instancia tiene su propio heap JVM con su propia copia del caché. Una escritura en la instancia A invalida su caché local, pero la instancia B sirve datos desactualizados hasta que expire o reciba una escritura propia. Redis como caché centralizado garantiza que todas las instancias lean el mismo estado — la invalidación reactiva por `@CacheEvict` propaga la invalidación a todos los consumidores de forma inmediata.
+
+2. **Latencia de red amortizada:** en producción, Redis corre en un servidor dedicado (o cluster) con latencia de red real (~1–2 ms). Esa latencia es constante e independiente del volumen de la colección MongoDB subyacente, que con miles de casos activos puede tomar decenas de milisegundos en el aggregation pipeline. El cache HIT de Redis a 2 ms sigue siendo drásticamente mejor que un MISS a 80 ms.
+
+El test local no mide el escenario para el que Redis fue diseñado — mide el overhead de red en ausencia de escala. El valor del resultado es otro: confirma que el fallback JVM funciona correctamente bajo 100 VU con 0% de errores, lo que garantiza que el sistema es operable en cualquier entorno de evaluación sin Redis como dependencia dura.
 
 ```bash
 brew install k6 && k6 run docs/k6-stress-test.js
@@ -641,12 +751,7 @@ jmeter -n -t docs/jmeter-findra.jmx -l /tmp/results.jtl -e -o /tmp/jmeter-report
 
 ### 7.4 Análisis de dependencias del sistema
 
-Se realizó un análisis estático completo del repositorio para validar la cohesión arquitectónica del código implementado. El grafo resultante comprende **622 nodos** (522 extraídos por AST + 100 conceptos semánticos de documentación) y **1.097 relaciones**, agrupados en **50 comunidades** detectadas mediante el algoritmo de Louvain.
-
-Las 50 comunidades se corresponden directamente con las capas de la arquitectura: controllers, services, mappers, modelos, DTOs, repositorios, configuración y frontend. La densidad de relaciones (~1.76 relaciones por nodo) es consistente con un sistema modular donde cada clase tiene responsabilidades acotadas.
-
-**[FIGURA — Grafo de dependencias del sistema]**
-*Grafo generado por análisis AST estático del repositorio. Cada nodo es un archivo o concepto; los colores indican la comunidad (módulo lógico) al que pertenece. El grafo completo e interactivo está disponible en `docs/graph.html`.*
+El análisis estático del repositorio (622 nodos, 1.097 relaciones, 50 comunidades Louvain) se documenta en **§4.3**, donde actúa como validación de que la arquitectura diseñada se materializó en el código. Los resultados confirman que la densidad de relaciones y la distribución de comunidades son coherentes con el sistema modular descrito en §4.1.
 
 ### 7.5 Seguridad en la capa de ingesta
 
@@ -750,7 +855,52 @@ MONGODB_URI=mongodb://mongo1:27017,mongo2:27017,mongo3:27017/findra?replicaSet=r
 
 ---
 
-## 9. Conclusión
+## 9. Reflexión sobre el Sistema Construido
+
+### 9.1 Qué construimos y por qué importa
+
+FINDRA es una plataforma operativa de gestión de emergencias para el Protocolo Alerta Sofía. No es una demostración conceptual ni un CRUD académico: es un sistema que modela con fidelidad el problema real que enfrenta el Estado argentino cuando desaparece un menor — la fragmentación de organismos, la heterogeneidad de los datos y la urgencia del tiempo.
+
+El valor central de FINDRA reside en la unificación. Siete organismos con sistemas independientes (PFA, Gendarmería, Prefectura, PSA, SIFEBU, PROTEX, Missing Children) pueden convergir sobre un único documento `Caso` en MongoDB, enriqueciéndolo de forma incremental sin sobrescribir el trabajo del otro. Esa coordinación, que hoy tarda horas por procesos burocráticos, en FINDRA ocurre en milisegundos. Lo que más nos satisface del sistema es que cada decisión técnica no es arbitraria — resuelve un problema concreto del dominio: el embedding resuelve la latencia de lectura en emergencia, Redis resuelve la carga sobre el dashboard de guardia, el endpoint unificado resuelve la fragmentación interorganismos, GridFS resuelve el almacenamiento de evidencia sin infraestructura externa, y el historial de acciones resuelve la trazabilidad de auditoría que hoy no existe en el protocolo real.
+
+### 9.2 Limitaciones honestas y cómo se resuelven en producción
+
+FINDRA es un prototipo académico con alcance deliberadamente acotado. Estas son las limitaciones y su path de resolución:
+
+| Limitación actual | Impacto | Resolución en producción |
+|---|---|---|
+| Autenticación simulada (`OP_FINDRA`) | Cualquier operador puede realizar cualquier acción | Integrar Spring Security + JWT o OAuth2. El modelo `Usuario` ya existe; no hay cambios de esquema. |
+| Instancia MongoDB única | Sin failover si el nodo cae | Activar el Replica Set rs0 de 3 nodos vía `MONGODB_URI`. Cero cambios en el código. |
+| Operador hardcodeado en historial | Auditoría no identifica al usuario real | Extraído del token JWT al autenticar. |
+| Canales de alerta simulados | SMS, cadena nacional y app no se activan | Integrar APIs de SIFEBU y medios. El modelo de datos no cambia — solo se agrega lógica en `emitirAlertas()`. |
+| Sin paginación en alertas/reportes | Límite de 100 registros en resúmenes | Agregar cursor-based pagination. Los índices ya están creados. |
+
+### 9.3 Metodología de trabajo y coordinación del equipo
+
+El equipo adoptó una dinámica de trabajo iterativa organizada en torno a las tres entregas formales de la materia, con responsabilidades distribuidas por módulo técnico y revisiones cruzadas antes de cada cierre.
+
+**Distribución de módulos:**
+
+| Integrante | Responsabilidad principal |
+|---|---|
+| Andrés Felipe Méndez Florez | Modelo de datos (MongoDB), índices y aggregation pipelines |
+| Aylen Solana Nahuel | Pipeline de ingesta multi-organismo, `IngestaMapper` y validaciones de seguridad |
+| Ignacio Lapolla | Arquitectura general, Spring Boot (services, caché Redis, GridFS) y tests unitarios |
+| Jonathan Dominguez | Frontend React — dashboard, vistas de caso, mapa interactivo y formularios |
+| Matias Marcon | Infraestructura (Docker, Replica Set), performance (k6, JMeter) y documentación técnica |
+
+**Herramientas de coordinación:**
+
+- **Control de versiones:** Git + GitHub con ramas por feature (`feature/ingesta`, `feature/frontend-mapa`, `feature/gridfs`, etc.) y pull requests con revisión de al menos un integrante antes de mergear a `master`.
+- **Gestión de tareas:** Issues de GitHub como tablero ligero — cada ítem de la rúbrica se convirtió en una issue cerrada al completarse.
+- **Comunicación:** Canal de WhatsApp para coordinación diaria y reuniones de sincronización semanales por videollamada para revisar avances y resolver bloqueos.
+- **Documentación compartida:** Informe construido de forma colaborativa en Markdown versionado en el mismo repositorio, con commits atribuidos por integrante.
+
+**Evolución del diseño:** Las decisiones de trade-off documentadas en §8 emergieron de discusiones del equipo en las reuniones de sincronización — por ejemplo, la elección de GridFS sobre S3 (§8.4) y el fallback Redis → JVM (§7.2.5) fueron propuestas por integrantes distintos y validadas colectivamente antes de implementarse.
+
+---
+
+## 10. Conclusión
 
 FINDRA en su versión final de entrega cumple los objetivos planteados en el diseño inicial y los supera mediante decisiones técnicas deliberadas y documentadas:
 
@@ -764,13 +914,17 @@ FINDRA en su versión final de entrega cumple los objetivos planteados en el dis
 
 Los trade-offs documentados en la sección 8 demuestran que cada desviación respecto al diseño original fue una decisión técnica deliberada con justificación explícita, no una omisión. La arquitectura está preparada para evolucionar hacia producción sin cambios estructurales en el código.
 
+El sistema supera los objetivos mínimos en cuatro dimensiones concretas. El motor NoSQL no se usa como simple almacén de documentos: los índices 2dsphere habilitan búsquedas geoespaciales nativas sobre sub-documentos embebidos, el aggregation pipeline calcula las métricas del dashboard en el motor sin transferir datos a la JVM, y GridFS integra el almacenamiento de binarios en la misma infraestructura MongoDB sin dependencias externas. La calidad técnica va más allá de los tests funcionales: se ejecutaron pruebas de carga con dos herramientas independientes (k6 y JMeter) que convergen en los mismos resultados, y se realizó un análisis AST estático del repositorio que valida empíricamente la cohesión de la arquitectura diseñada. La seguridad fue tratada como requisito, no como afterthought: cuatro vulnerabilidades identificadas y corregidas durante el desarrollo con fixes documentados en el código. Finalmente, el fallback Redis → caché JVM garantiza que el sistema funcione en cualquier entorno de evaluación sin depender de infraestructura externa — una decisión de robustez que el requerimiento original no pedía.
+
 ---
 
-## 10. Guía Funcional de la Aplicación
+---
+
+## Anexo A — Guía Funcional de la Aplicación
 
 Esta sección documenta el recorrido completo por las funcionalidades de FINDRA, con sus flujos de interacción y los datos que persisten en MongoDB en cada paso.
 
-### 10.1 Mapa de navegación
+### A.1 Mapa de navegación
 
 ```mermaid
 graph TD
@@ -791,7 +945,7 @@ graph TD
     E --> I
 ```
 
-### 10.2 Flujo A — Registro de un caso nuevo
+### A.2 Flujo A — Registro de un caso nuevo
 
 El operador de una fuerza federal (PFA, Gendarmería, Prefectura o PSA) abre la aplicación e ingresa los datos del caso desde el formulario de alta.
 
@@ -829,7 +983,7 @@ sequenceDiagram
 }
 ```
 
-### 10.3 Flujo B — Emisión de Alerta Sofía
+### A.3 Flujo B — Emisión de Alerta Sofía
 
 Desde el detalle del caso, el operador activa la alerta interinstitucional por los canales disponibles.
 
@@ -866,7 +1020,7 @@ sequenceDiagram
 - `ENVIADA` — el operador confirmó sin requerir autorización adicional
 - `REQUIERE_AUTORIZACION` — pendiente de aprobación del fiscal a cargo (registrado en `observaciones`)
 
-### 10.4 Flujo C — Ingesta multi-organismo vía API
+### A.4 Flujo C — Ingesta multi-organismo vía API
 
 Los 7 organismos del protocolo pueden enriquecer el mismo caso de forma incremental mediante el endpoint de ingesta unificado. Este flujo es exclusivamente de API (sin UI).
 
@@ -895,7 +1049,7 @@ sequenceDiagram
     API-->>Org: 200 OK / 201 Created
 ```
 
-### 10.5 Flujo D — Dashboard con caché Redis
+### A.5 Flujo D — Dashboard con caché Redis
 
 El dashboard es la vista de mayor tráfico del sistema. La capa Redis garantiza respuestas sub-10ms para el 95% de los accesos.
 
@@ -925,7 +1079,7 @@ sequenceDiagram
     Note over API,Redis: Cualquier escritura (crear caso,<br/>emitir alerta, cambiar estado)<br/>dispara @CacheEvict inmediato
 ```
 
-### 10.6 Flujo E — Cierre o archivo de caso
+### A.6 Flujo E — Cierre o archivo de caso
 
 ```mermaid
 stateDiagram-v2
@@ -943,7 +1097,7 @@ Cuando el operador cierra o archiva el caso:
 3. `@CacheEvict` invalida el resumen del dashboard en Redis
 4. Los botones "Emitir Alerta Sofía" quedan deshabilitados (validación `caso.estado !== "ACTIVO"`)
 
-### 10.7 Flujo F — Subida y descarga de documentos (GridFS)
+### A.7 Flujo F — Subida y descarga de documentos (GridFS)
 
 ```mermaid
 sequenceDiagram
@@ -969,7 +1123,7 @@ sequenceDiagram
     UI->>UI: Abre archivo en nueva pestaña
 ```
 
-### 10.8 Recorrido completo por la UI
+### A.8 Recorrido completo por la UI
 
 | Vista | Acceso | Funciones disponibles | Endpoints consumidos |
 |---|---|---|---|
@@ -981,91 +1135,6 @@ sequenceDiagram
 | **Reportes** | Nav "Reportes" | Lista de reportes ciudadanos por caso, estado (RECIBIDO/VERIFICADO/DESCARTADO) | `GET /api/reportes` |
 | **Mapa** | Nav "Mapa" | Vista cartográfica interactiva con OpenStreetMap, sidebar de casos activos, popup con acceso al detalle | `GET /api/casos?estado=ACTIVO` |
 | **Usuarios** | Nav "Usuarios" | Listar operadores registrados, dar de alta nuevo usuario con rol y organismo | `GET /api/usuarios`, `POST /api/usuarios` |
-
----
-
-## 11. Reflexión sobre el Sistema Construido
-
-### 11.1 Qué construimos y por qué importa
-
-FINDRA es una plataforma operativa de gestión de emergencias para el Protocolo Alerta Sofía. No es una demostración conceptual ni un CRUD académico: es un sistema que modela con fidelidad el problema real que enfrenta el Estado argentino cuando desaparece un menor — la fragmentación de organismos, la heterogeneidad de los datos y la urgencia del tiempo.
-
-El valor central de FINDRA reside en la unificación. Siete organismos con sistemas independientes (PFA, Gendarmería, Prefectura, PSA, SIFEBU, PROTEX, Missing Children) pueden convergir sobre un único documento `Caso` en MongoDB, enriqueciéndolo de forma incremental sin sobrescribir el trabajo del otro. Esa coordinación, que hoy tarda horas por procesos burocráticos, en FINDRA ocurre en milisegundos.
-
-### 11.2 Funcionalidades implementadas
-
-| Funcionalidad | Descripción |
-|---|---|
-| **Dashboard en tiempo real** | Métricas de casos activos, alertas emitidas, resueltos del mes. Respuesta < 5ms con Redis activo. |
-| **Registro de casos** | Formulario completo con datos biométricos del menor (nombre, edad, sexo, cabello, ojos, estatura, peso, ropa, señas), datos del denunciante, autoridad judicial, adjuntos y coordenadas GPS. |
-| **Buscador con filtros** | Búsqueda por texto libre, estado del caso, zona geográfica y rango de edad. Paginado y ordenado por fecha de activación. |
-| **Detalle de caso** | Ficha completa con mapa de última ubicación conocida (OpenStreetMap con coordenadas reales de MongoDB), gestor de alertas, documentos adjuntos descargables y línea de tiempo de acciones. |
-| **Emisión de Alerta Sofía** | Selección de canales (SMS masivo, redes sociales, cadena nacional, app ciudadana), observaciones y flag de autorización judicial pendiente. |
-| **Ciclo de vida del caso** | Transiciones de estado ACTIVO → RESUELTO / ARCHIVADO con registro automático de `fecha_cierre` y entrada en el historial. |
-| **Documentos adjuntos (GridFS)** | Upload de evidencia (imágenes, PDF, DOC) almacenada en GridFS nativo de MongoDB. Descarga directa desde la UI con `Content-Disposition` seguro (RFC 6266). |
-| **Ingesta multi-organismo** | Endpoint unificado `POST /api/ingesta/organismo` con validación de origen, sanitización de datos y enriquecimiento incremental del caso. |
-| **Reportes ciudadanos** | Registro de avistamientos con geolocalización, contacto y estado (RECIBIDO / VERIFICADO / DESCARTADO). |
-| **Mapa interactivo nacional** | Vista cartográfica con todos los casos activos sobre OpenStreetMap. Sidebar navegable, popups con acceso directo al detalle. |
-| **Gestión de usuarios** | Alta de operadores con rol (OPERADOR / FISCAL / COORDINADOR / SUPERVISOR) y organismo validado contra el enum de fuentes. |
-| **Auditoría completa** | Cada acción sobre el caso (creación, alerta, reporte, cambio de estado, documento) queda registrada en `historial_acciones` con operador, timestamp y detalle. |
-
-### 11.3 Por qué el diseño técnico es el correcto
-
-**MongoDB con embedding es la decisión más importante del sistema.** El patrón de acceso dominante en una emergencia es "dame todo lo que sé del caso AS-2026-001 ahora mismo". Con embedding, eso es una lectura O(1) de un único documento. Con colecciones separadas y referencias, serían entre 4 y 8 operaciones de lookup encadenadas — inaceptable en un sistema donde el tiempo es literalmente crítico.
-
-**Redis no es un adorno.** El dashboard es la pantalla que tiene abierta el coordinador de guardia. Si MongoDB recibe 50 operadores mirando el dashboard cada 30 segundos, son 150 aggregations por minuto sobre una colección que puede tener miles de casos. Redis los absorbe todos y devuelve la respuesta en 4ms. La invalidación reactiva — no por TTL sino por escritura — garantiza que esos 4ms devuelvan datos reales, no datos viejos.
-
-**Los índices 2dsphere habilitan búsquedas geoespaciales que en un sistema relacional requerirían una extensión PostGIS y una consulta compleja.** En FINDRA, buscar todos los casos activos en un radio de 5km de una coordenada es una query nativa de MongoDB sobre el campo `menor.ultima_ubicacion`.
-
-**El endpoint de ingesta unificado reduce la fricción de integración a cero.** Cada organismo solo necesita conocer tres campos: `organismo`, `tipoFuente` y `payload`. El sistema resuelve internamente qué hacer con eso — crear un caso nuevo, agregar una alerta, actualizar la autoridad judicial o registrar un reporte ciudadano. Agregar un octavo organismo en el futuro no requiere cambiar el contrato.
-
-### 11.4 Lo que nos gusta del sistema
-
-Lo que más nos satisface de FINDRA es que las decisiones técnicas no son arbitrarias — cada una resuelve un problema concreto del dominio:
-
-- El embedding resuelve la latencia de lectura en emergencia
-- Redis resuelve la carga sobre el dashboard de guardia
-- El endpoint unificado resuelve la fragmentación interorganismos
-- GridFS resuelve el almacenamiento de evidencia sin infraestructura externa
-- El enum `OrganismoFuente` resuelve la validación de origen en todo el sistema con una sola fuente de verdad
-- El historial de acciones resuelve la trazabilidad de auditoría que hoy no existe en el protocolo real
-
-La coherencia entre el modelo de datos, los índices, los servicios y el frontend es otro punto fuerte: lo que se documenta en el JSON schema del informe es exactamente lo que persiste en MongoDB y lo que devuelve la API al frontend. No hay divergencias.
-
-### 11.5 Limitaciones honestas y cómo se resuelven en producción
-
-FINDRA es un prototipo académico con alcance deliberadamente acotado. Estas son las limitaciones y su path de resolución:
-
-| Limitación actual | Impacto | Resolución en producción |
-|---|---|---|
-| Autenticación simulada (`OP_FINDRA`) | Cualquier operador puede realizar cualquier acción | Integrar Spring Security + JWT o OAuth2. El modelo `Usuario` ya existe; no hay cambios de esquema. |
-| Instancia MongoDB única | Sin failover si el nodo cae | Activar el Replica Set rs0 de 3 nodos vía `MONGODB_URI`. Cero cambios en el código. |
-| Operador hardcodeado en historial | Auditoría no identifica al usuario real | Extraído del token JWT al autenticar. |
-| Canales de alerta simulados | SMS, cadena nacional y app no se activan | Integrar APIs de SIFEBU y medios. El modelo de datos no cambia — solo se agrega lógica en `emitirAlertas()`. |
-| Sin paginación en alertas/reportes | Límite de 100 registros en resúmenes | Agregar cursor-based pagination. Los índices ya están creados. |
-
-### 11.6 Metodología de trabajo y coordinación del equipo
-
-El equipo adoptó una dinámica de trabajo iterativa organizada en torno a las tres entregas formales de la materia, con responsabilidades distribuidas por módulo técnico y revisiones cruzadas antes de cada cierre.
-
-**Distribución de módulos:**
-
-| Integrante | Responsabilidad principal |
-|---|---|
-| Andrés Felipe Méndez Florez | Modelo de datos (MongoDB), índices y aggregation pipelines |
-| Aylen Solana Nahuel | Pipeline de ingesta multi-organismo, `IngestaMapper` y validaciones de seguridad |
-| Ignacio Lapolla | Arquitectura general, Spring Boot (services, caché Redis, GridFS) y tests unitarios |
-| Jonathan Dominguez | Frontend React — dashboard, vistas de caso, mapa interactivo y formularios |
-| Matias Marcon | Infraestructura (Docker, Replica Set), performance (k6, JMeter) y documentación técnica |
-
-**Herramientas de coordinación:**
-
-- **Control de versiones:** Git + GitHub con ramas por feature (`feature/ingesta`, `feature/frontend-mapa`, `feature/gridfs`, etc.) y pull requests con revisión de al menos un integrante antes de mergear a `master`.
-- **Gestión de tareas:** Issues de GitHub como tablero ligero — cada ítem de la rúbrica se convirtió en una issue cerrada al completarse.
-- **Comunicación:** Canal de WhatsApp para coordinación diaria y reuniones de sincronización semanales por videollamada para revisar avances y resolver bloqueos.
-- **Documentación compartida:** Informe construido de forma colaborativa en Markdown versionado en el mismo repositorio, con commits atribuidos por integrante.
-
-**Evolución del diseño:** Las decisiones de trade-off documentadas en §8 emergieron de discusiones del equipo en las reuniones de sincronización — por ejemplo, la elección de GridFS sobre S3 (§8.4) y el fallback Redis → JVM (§7.2.5) fueron propuestas por integrantes distintos y validadas colectivamente antes de implementarse.
 
 ---
 
