@@ -21,7 +21,9 @@ import java.io.IOException;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.bson.types.ObjectId;
@@ -44,11 +46,14 @@ public class CasoService {
     private final CasoRepository casoRepository;
     private final MongoOperations mongoTemplate;
     private final GridFsTemplate gridFsTemplate;
+    private final GeocodingService geocodingService;
 
-    public CasoService(CasoRepository casoRepository, MongoOperations mongoTemplate, GridFsTemplate gridFsTemplate) {
+    public CasoService(CasoRepository casoRepository, MongoOperations mongoTemplate,
+            GridFsTemplate gridFsTemplate, GeocodingService geocodingService) {
         this.casoRepository = casoRepository;
         this.mongoTemplate = mongoTemplate;
         this.gridFsTemplate = gridFsTemplate;
+        this.geocodingService = geocodingService;
     }
 
     public List<Caso> buscar(
@@ -72,8 +77,32 @@ public class CasoService {
             query.addCriteria(Criteria.where("estado").is(estado));
         }
         if (zona != null && !zona.isBlank()) {
-            query.addCriteria(Criteria.where("zona").regex(
-                    Pattern.compile(Pattern.quote(zona.trim()), Pattern.CASE_INSENSITIVE)));
+            String zonaFilter = zona.trim();
+            String provinciaFiltro = geocodingService.resolverProvincia(zonaFilter);
+
+            Set<String> zonasMatcheantes = new LinkedHashSet<>();
+            if (provinciaFiltro != null) {
+                List<String> todasLasZonas = mongoTemplate.findDistinct(
+                        new Query(), "zona", Caso.class, String.class);
+                for (String z : todasLasZonas) {
+                    if (z != null && !z.isBlank()
+                            && provinciaFiltro.equalsIgnoreCase(geocodingService.resolverProvincia(z))) {
+                        zonasMatcheantes.add(z.trim());
+                    }
+                }
+            }
+            zonasMatcheantes.add(zonaFilter);
+
+            List<Criteria> opciones = zonasMatcheantes.stream()
+                    .map(z -> Criteria.where("zona").regex(
+                            Pattern.compile(Pattern.quote(z), Pattern.CASE_INSENSITIVE)))
+                    .collect(Collectors.toList());
+
+            if (opciones.size() == 1) {
+                query.addCriteria(opciones.get(0));
+            } else {
+                query.addCriteria(new Criteria().orOperator(opciones.toArray(new Criteria[0])));
+            }
         }
         if (edadMin != null || edadMax != null) {
             Criteria edadCriteria = Criteria.where("menor.edad");

@@ -24,7 +24,7 @@ import org.springframework.data.mongodb.gridfs.GridFsTemplate;
 class CasoServiceTest {
 
     private CasoService service(CasoRepository repository, MongoOperations mongoTemplate) {
-        return new CasoService(repository, mongoTemplate, mock(GridFsTemplate.class));
+        return new CasoService(repository, mongoTemplate, mock(GridFsTemplate.class), mock(GeocodingService.class));
     }
 
     @Test

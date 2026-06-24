@@ -448,7 +448,8 @@ h2 {
   color: #ffffff;
 }
 
-.primary-button:disabled {
+.primary-button:disabled,
+.ghost-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }

@@ -725,7 +725,7 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport,
         <div className="panel timeline">
           <div className="panel-title">
             <h2>Línea de tiempo</h2>
-            <button className="ghost-button" type="button" onClick={onQuickReport}>
+            <button className="ghost-button" type="button" onClick={onQuickReport} disabled={caso.estado !== "ACTIVO"}>
               Reporte rápido
             </button>
           </div>
