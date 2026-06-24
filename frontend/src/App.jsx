@@ -353,7 +353,6 @@ export function App() {
         {view === "dashboard" && (
           <Dashboard
             activeCases={activeCases}
-            cases={casos}
             dashboard={dashboard}
             loading={loading}
             onCreateCase={() => setView("new-case")}
@@ -443,7 +442,7 @@ export function App() {
   );
 }
 
-function Dashboard({ activeCases, cases, dashboard, loading, onCreateCase, onOpenCase }) {
+function Dashboard({ activeCases, dashboard, loading, onCreateCase, onOpenCase }) {
   return (
     <section className="view-grid">
       <div className="section-heading">
@@ -857,8 +856,8 @@ function NewCaseView({ onBack, onSubmit }) {
             <label>Ropa<input value={form.menorRopa} onChange={(e) => set("menorRopa", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ ,.-]/g, ""))} placeholder="Ej: camisa azul, jeans" /></label>
             <label>Señas particulares<input value={form.menorSenas} onChange={(e) => set("menorSenas", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ ,.-]/g, ""))} placeholder="Ej: lunar en mejilla izquierda" /></label>
             <label>Zona / última ubicación *<input required value={form.zona} onChange={(e) => set("zona", e.target.value.replace(/[^A-Za-záéíóúÁÉÍÓÚñÑüÜ ,.-]/g, ""))} placeholder="Ej: CABA" /></label>
-            <label>Latitud<input type="number" step="any" value={form.menorLat} onChange={(e) => set("menorLat", e.target.value)} /></label>
-            <label>Longitud<input type="number" step="any" value={form.menorLng} onChange={(e) => set("menorLng", e.target.value)} /></label>
+            <label>Latitud<input type="number" step="any" min="-90" max="90" value={form.menorLat} onChange={(e) => set("menorLat", e.target.value)} /></label>
+            <label>Longitud<input type="number" step="any" min="-180" max="180" value={form.menorLng} onChange={(e) => set("menorLng", e.target.value)} /></label>
           </div>
         </div>
 
