@@ -1044,6 +1044,29 @@ FINDRA es un prototipo académico con alcance deliberadamente acotado. Estas son
 | Canales de alerta simulados | SMS, cadena nacional y app no se activan | Integrar APIs de SIFEBU y medios. El modelo de datos no cambia — solo se agrega lógica en `emitirAlertas()`. |
 | Sin paginación en alertas/reportes | Límite de 100 registros en resúmenes | Agregar cursor-based pagination. Los índices ya están creados. |
 
+### 11.6 Metodología de trabajo y coordinación del equipo
+
+El equipo adoptó una dinámica de trabajo iterativa organizada en torno a las tres entregas formales de la materia, con responsabilidades distribuidas por módulo técnico y revisiones cruzadas antes de cada cierre.
+
+**Distribución de módulos:**
+
+| Integrante | Responsabilidad principal |
+|---|---|
+| Andrés Felipe Méndez Florez | Modelo de datos (MongoDB), índices y aggregation pipelines |
+| Aylen Solana Nahuel | Pipeline de ingesta multi-organismo, `IngestaMapper` y validaciones de seguridad |
+| Ignacio Lapolla | Arquitectura general, Spring Boot (services, caché Redis, GridFS) y tests unitarios |
+| Jonathan Dominguez | Frontend React — dashboard, vistas de caso, mapa interactivo y formularios |
+| Matias Marcon | Infraestructura (Docker, Replica Set), performance (k6, JMeter) y documentación técnica |
+
+**Herramientas de coordinación:**
+
+- **Control de versiones:** Git + GitHub con ramas por feature (`feature/ingesta`, `feature/frontend-mapa`, `feature/gridfs`, etc.) y pull requests con revisión de al menos un integrante antes de mergear a `master`.
+- **Gestión de tareas:** Issues de GitHub como tablero ligero — cada ítem de la rúbrica se convirtió en una issue cerrada al completarse.
+- **Comunicación:** Canal de WhatsApp para coordinación diaria y reuniones de sincronización semanales por videollamada para revisar avances y resolver bloqueos.
+- **Documentación compartida:** Informe construido de forma colaborativa en Markdown versionado en el mismo repositorio, con commits atribuidos por integrante.
+
+**Evolución del diseño:** Las decisiones de trade-off documentadas en §8 emergieron de discusiones del equipo en las reuniones de sincronización — por ejemplo, la elección de GridFS sobre S3 (§8.4) y el fallback Redis → JVM (§7.2.5) fueron propuestas por integrantes distintos y validadas colectivamente antes de implementarse.
+
 ---
 
 *Ingeniería de Datos II · TPO · Grupo 3 · 2026*
