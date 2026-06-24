@@ -781,15 +781,16 @@ Durante la implementación se tomaron decisiones pragmáticas que ajustan el dis
 
 **Justificación:** Se priorizó la operación de mayor costo (dashboard con 4 aggregations MongoDB) sobre caché de sesiones, dado que el sistema usa autenticación simulada. La invalidación reactiva garantiza consistencia sin TTL agresivo.
 
-### 8.2 Mapa: proveedor cartográfico externo → proyección propia
+### 8.2 Mapa: Google Maps → OpenStreetMap (Leaflet + Nominatim)
 
 | | Diseño inicial | Implementación final |
 |---|---|---|
-| Visualización | Mapa geográfico de casos activos | Proyección sobre bounding box de Argentina |
-| Proveedor | Google Maps / Leaflet (implícito) | Ninguno |
-| Fuente de coordenadas | GPS del caso | `menor.ultimaUbicacion.coordinates` de MongoDB |
+| Visualización | Mapa geográfico de casos activos | Mapa interactivo con tiles reales (detalle de caso y vista global) |
+| Proveedor de tiles | Google Maps (implícito) | OpenStreetMap vía Leaflet / React-Leaflet 4.2 |
+| Geocoding | No especificado | Nominatim API (`nominatim.openstreetmap.org`) en `GeocodingService` |
+| Fuente de coordenadas | GPS del caso | `menor.ultimaUbicacion.coordinates` de MongoDB (GeoJSON) |
 
-**Justificación:** Se descartó integrar un proveedor cartográfico externo para evitar dependencias de API keys en el entorno de evaluación. Los índices 2dsphere ya existían; la proyección sobre el bounding box argentino (lng: -73 a -53, lat: -55 a -22) es suficiente para demostrar la capacidad geoespacial del sistema.
+**Justificación:** Se descartó Google Maps por su dependencia de API key en entornos de evaluacion. OpenStreetMap cubre ambas necesidades del sistema — tiles interactivos (Leaflet) y resolución de zonas geográficas a provincias (Nominatim) — sin requerir credenciales ni infraestructura adicional. El `GeocodingService` cachea los resultados de Nominatim para evitar llamadas repetidas a la API externa.
 
 ### 8.3 Autenticación: sistema de roles → operador simulado
 
