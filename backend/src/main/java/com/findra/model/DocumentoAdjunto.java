@@ -18,6 +18,8 @@ public class DocumentoAdjunto {
 
     private Instant timestamp;
 
+    private String transcripcion;
+
     public DocumentoAdjunto() {
     }
 
@@ -66,5 +68,13 @@ public class DocumentoAdjunto {
 
     public void setTimestamp(Instant timestamp) {
         this.timestamp = timestamp;
+    }
+
+    public String getTranscripcion() {
+        return transcripcion;
+    }
+
+    public void setTranscripcion(String transcripcion) {
+        this.transcripcion = transcripcion;
     }
 }

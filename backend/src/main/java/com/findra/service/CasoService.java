@@ -47,13 +47,15 @@ public class CasoService {
     private final MongoOperations mongoTemplate;
     private final GridFsTemplate gridFsTemplate;
     private final GeocodingService geocodingService;
+    private final AudioService audioService;
 
     public CasoService(CasoRepository casoRepository, MongoOperations mongoTemplate,
-            GridFsTemplate gridFsTemplate, GeocodingService geocodingService) {
+            GridFsTemplate gridFsTemplate, GeocodingService geocodingService, AudioService audioService) {
         this.casoRepository = casoRepository;
         this.mongoTemplate = mongoTemplate;
         this.gridFsTemplate = gridFsTemplate;
         this.geocodingService = geocodingService;
+        this.audioService = audioService;
     }
 
     public List<Caso> buscar(
@@ -267,6 +269,14 @@ public class CasoService {
                 operador(operador),
                 Instant.now());
         doc.setGridFsId(gridFsId.toString());
+        String ct = file.getContentType() != null ? file.getContentType() : "";
+        if (ct.startsWith("audio/") || ct.startsWith("video/")) {
+            try {
+                doc.setTranscripcion(audioService.procesarAudio(file).getTranscripcion());
+            } catch (Exception e) {
+                doc.setTranscripcion(null);
+            }
+        }
         caso.getDocumentosAdjuntos().add(doc);
         caso.getHistorialAcciones().add(new AccionHistorial(
                 "documento_adjuntado",
