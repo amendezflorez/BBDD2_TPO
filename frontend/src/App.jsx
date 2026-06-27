@@ -764,13 +764,13 @@ function NewCaseView({ onBack, onSubmit }) {
   const [audioFile, setAudioFile] = useState(null);
   const [audioLoading, setAudioLoading] = useState(false);
   const [audioError, setAudioError] = useState("");
-  const [audioSuccess, setAudioSuccess] = useState(false);
+  const [transcripcion, setTranscripcion] = useState("");
 
   const handleAudioChange = (event) => {
     if (event.target.files && event.target.files[0]) {
       setAudioFile(event.target.files[0]);
       setAudioError("");
-      setAudioSuccess(false);
+      setTranscripcion("");
     }
   };
 
@@ -778,32 +778,10 @@ function NewCaseView({ onBack, onSubmit }) {
     if (!audioFile) return;
     setAudioLoading(true);
     setAudioError("");
-    setAudioSuccess(false);
+    setTranscripcion("");
     try {
       const data = await procesarAudio(audioFile);
-
-      setForm((prev) => ({
-        ...prev,
-        menorNombre: data.menorNombre ?? prev.menorNombre,
-        menorEdad: data.menorEdad !== undefined && data.menorEdad !== null ? String(data.menorEdad) : prev.menorEdad,
-        menorSexo: data.menorSexo ?? prev.menorSexo,
-        menorCabello: data.menorCabello ?? prev.menorCabello,
-        menorOjos: data.menorOjos ?? prev.menorOjos,
-        menorEstatura: data.menorEstatura !== undefined && data.menorEstatura !== null ? String(data.menorEstatura) : prev.menorEstatura,
-        menorRopa: data.menorRopa ?? prev.menorRopa,
-        menorSenas: data.menorSenas ?? prev.menorSenas,
-        zona: data.zona ?? prev.zona,
-        menorLat: data.menorLat !== undefined && data.menorLat !== null ? String(data.menorLat) : prev.menorLat,
-        menorLng: data.menorLng !== undefined && data.menorLng !== null ? String(data.menorLng) : prev.menorLng,
-        denuncianteNombre: data.denuncianteNombre ?? prev.denuncianteNombre,
-        denuncianteVinculo: data.denuncianteVinculo ?? prev.denuncianteVinculo,
-        denuncianteTel: data.denuncianteTel ?? prev.denuncianteTel,
-        juez: data.juez ?? prev.juez,
-        fiscal: data.fiscal ?? prev.fiscal,
-        nroExpediente: data.nroExpediente ?? prev.nroExpediente,
-      }));
-
-      setAudioSuccess(true);
+      setTranscripcion(data.transcripcion ?? "");
     } catch (err) {
       setAudioError(err.message ?? "Error al procesar el audio");
     } finally {
@@ -890,12 +868,12 @@ function NewCaseView({ onBack, onSubmit }) {
       </div>
 
       <div className="panel audio-upload-panel">
-        <h2>Carga rápida por Audio</h2>
-        <p>Sube un archivo de audio o video (MP4, MP3, WAV, etc.) relatando la desaparición para autocompletar el formulario.</p>
+        <h2>Transcripción de Audio</h2>
+        <p>Sube un archivo de audio (MP3, WAV, WebM, etc.) relatando la desaparición. El texto transcripto aparecerá abajo para que completes el formulario.</p>
         <div className="audio-upload-controls">
           <input
             type="file"
-            accept="audio/*,video/*"
+            accept="audio/*"
             onChange={handleAudioChange}
             disabled={audioLoading}
           />
@@ -905,11 +883,16 @@ function NewCaseView({ onBack, onSubmit }) {
             onClick={handleProcessAudio}
             disabled={!audioFile || audioLoading}
           >
-            {audioLoading ? "Procesando..." : "Procesar Audio"}
+            {audioLoading ? "Transcribiendo..." : "Transcribir Audio"}
           </button>
         </div>
         {audioError && <div className="audio-error">{audioError}</div>}
-        {audioSuccess && <div className="audio-success">¡Campos completados con éxito! Por favor, revísalos antes de enviar.</div>}
+        {transcripcion && (
+          <div className="audio-transcripcion">
+            <strong>Transcripción:</strong>
+            <p>{transcripcion}</p>
+          </div>
+        )}
       </div>
 
       <form className="new-case-form" onSubmit={handleSubmit}>

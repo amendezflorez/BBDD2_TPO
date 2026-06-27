@@ -24,5 +24,14 @@ services:
       ME_CONFIG_MONGODB_SERVER: mongo
       ME_CONFIG_BASICAUTH: "false"
 
+  whisper:
+    build: ./whisper-service
+    container_name: findra-whisper
+    ports:
+      - "8001:8001"
+    volumes:
+      - whisper_models:/root/.cache
+
 volumes:
   findra_mongo_data:
+  whisper_models:
