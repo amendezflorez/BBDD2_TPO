@@ -44,6 +44,7 @@ const TIPOS_DOCUMENTO = ["Foto", "DNI", "Acta", "Informe", "Otro"];
 
 function detectarTipo(file) {
   if (file.type.startsWith("image/")) return "Foto";
+  if (file.type.startsWith("audio/") || file.type.startsWith("video/")) return "Audio";
   if (file.type === "application/pdf") return "Informe";
   if (file.type.includes("word") || file.type.includes("document")) return "Acta";
   return "Otro";
@@ -701,7 +702,7 @@ function CaseDetail({ caso, onBack, onCambiarEstado, onEmitAlert, onQuickReport,
                 </select>
                 <label className="ghost-button" style={{ cursor: "pointer", marginBottom: 0 }}>
                   + Adjuntar
-                  <input type="file" style={{ display: "none" }} accept="image/*,.pdf,.doc,.docx" onChange={handleFileChange} />
+                  <input type="file" style={{ display: "none" }} accept="image/*,audio/*,video/*,.pdf,.doc,.docx" onChange={handleFileChange} />
                 </label>
               </div>
             )}
@@ -945,7 +946,7 @@ function NewCaseView({ onBack, onSubmit }) {
               <input
                 type="file"
                 multiple
-                accept="image/*,.pdf,.doc,.docx"
+                accept="image/*,audio/*,video/*,.pdf,.doc,.docx"
                 onChange={(e) => {
                   const nuevos = Array.from(e.target.files).map((f) => ({ file: f, tipo: detectarTipo(f) }));
                   setAdjuntos((prev) => [...prev, ...nuevos]);
