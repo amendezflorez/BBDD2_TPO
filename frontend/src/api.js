@@ -84,6 +84,24 @@ export function actualizarEstado(casoId, estado, resultado = null) {
   });
 }
 
+export async function procesarAudio(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE_URL}/audio/procesar`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ message: "Error inesperado" }));
+    throw new Error(detail.message ?? "No se pudo procesar el archivo de audio");
+  }
+
+  return response.json();
+}
+
+
 export function subirDocumento(casoId, file, tipo) {
   const formData = new FormData();
   formData.append("file", file);
